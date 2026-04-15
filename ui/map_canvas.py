@@ -79,6 +79,10 @@ class MapCanvas(QWidget):
         # 提示文字 (地图未加载时)
         self._placeholder_text = "地图未加载\n请加载地图以开始使用"
 
+        # 图标缓存
+        self._icon_cache: dict = {}  # mark_type -> QPixmap
+        self._icon_size = 24  # 显示大小
+
         # 启用鼠标追踪
         self.setMouseTracking(True)
 
@@ -320,22 +324,59 @@ class MapCanvas(QWidget):
 
         painter.restore()
 
+    def load_resource_icons(self, icons_dir: str, mark_types: list):
+        """加载资源图标"""
+        import os
+        self._icon_cache.clear()
+        if not os.path.exists(icons_dir):
+            return
+        
+        for filename in os.listdir(icons_dir):
+            if not filename.endswith('.png'):
+                continue
+            try:
+                # filename format: "201_庇护所.png"
+                mt_id = int(filename.split('_')[0])
+                filepath = os.path.join(icons_dir, filename)
+                pixmap = QPixmap(filepath)
+                if not pixmap.isNull():
+                    scaled = pixmap.scaled(
+                        self._icon_size, self._icon_size,
+                        Qt.KeepAspectRatio, Qt.SmoothTransformation
+                    )
+                    self._icon_cache[mt_id] = scaled
+            except (ValueError, Exception):
+                continue
+        
+        logger.info("Loaded %d resource icons", len(self._icon_cache))
+
     def _draw_resources(self, painter: QPainter):
         if not self._resource_points:
             return
 
         painter.save()
+        half = self._icon_size // 2
+        
         for res in self._resource_points:
             x, y = res.get("x", 0), res.get("y", 0)
             sp = self.world_to_screen(x, y)
 
-            # 只绘制可见区域内的资源点
             if not self.rect().contains(sp.toPoint()):
                 continue
 
-            painter.setBrush(QColor("#ed8936"))
-            painter.setPen(QPen(QColor("#ffffff"), 1))
-            painter.drawEllipse(sp, 4, 4)
+            mt = res.get("mark_type", 0)
+            icon = self._icon_cache.get(mt)
+            
+            if icon and not icon.isNull():
+                painter.drawPixmap(
+                    int(sp.x()) - half, int(sp.y()) - half, icon
+                )
+            else:
+                # Fallback: colored dot
+                painter.setBrush(QColor("#ed8936"))
+                painter.setPen(QPen(QColor("#ffffff"), 1))
+                painter.drawEllipse(sp, 4, 4)
+        
         painter.restore()
 
     # ==================== Interaction ====================

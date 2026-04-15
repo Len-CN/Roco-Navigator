@@ -532,6 +532,7 @@ class MainWindow(QMainWindow):
             progress=nav_info.progress,
             current_idx=nav_info.current_target_index,
             total=nav_info.total_targets,
+            direction_to_target=nav_info.direction_to_target,
         )
 
     # ==================== Data ====================
@@ -634,6 +635,12 @@ class MainWindow(QMainWindow):
 
         count = self._resource_manager.count
         self._map_canvas.set_resources(self._resource_manager.to_display_list())
+
+        # Load WIKI icons
+        import os
+        icons_dir = os.path.join(self._wiki_updater._icons_dir)
+        self._map_canvas.load_resource_icons(icons_dir, cache.get("mark_types", []))
+
         self._sidebar.set_data_info(f"已从 WIKI 加载 {count} 个点位")
         logger.info("Loaded %d points from cache", count)
 
@@ -680,7 +687,27 @@ class MainWindow(QMainWindow):
         """打开设置对话框"""
         from roco_navigator.ui.dialogs.settings_dialog import SettingsDialog
         dialog = SettingsDialog(self._settings, self)
+        dialog.settings_changed.connect(self._apply_settings)
         dialog.exec_()
+
+    def _apply_settings(self):
+        """应用设置变更到运行中的模块"""
+        # Update tracker config
+        interval = self._settings.get("tracking.update_interval", 100)
+        if self._tracking_timer.isActive():
+            self._tracking_timer.setInterval(interval)
+        
+        # Update HUD opacity
+        opacity = self._settings.get("ui.overlay_opacity", 0.85)
+        self._overlay_hud.set_opacity(opacity)
+        
+        # Update navigator
+        self._navigator._arrival_distance = self._settings.get("navigation.arrival_distance", 20)
+        
+        # GPU status display
+        self._update_gpu_status()
+        
+        logger.info("Settings applied")
 
     # ==================== Misc ====================
 

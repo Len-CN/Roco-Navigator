@@ -27,7 +27,7 @@
     },
     "show_route_line": true,
     "show_distance": true,
-    "show_compass": true,
+    "show_compass": false,
     "theme": "neumorphism"
   },
   "performance": {
@@ -54,7 +54,7 @@
   },
   "navigation": {
     "arrival_distance": 20,
-    "route_strategy": "nearest",
+    "route_strategy": "optimal",
     "use_2opt": true,
     "show_eta": true
   },

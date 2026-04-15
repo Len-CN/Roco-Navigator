@@ -100,6 +100,7 @@ class OverlayHUD(QWidget):
         self._current_index: int = 0
         self._total_targets: int = 0
         self._crop_scale: float = 1.0              # 裁剪图到显示区域的缩放比
+        self._direction_to_target: float = 0.0  # degrees, 0=up
 
         # 交互状态
         self._dragging = False
@@ -109,6 +110,35 @@ class OverlayHUD(QWidget):
 
         # 缓存
         self._bg_cache: Optional[QPixmap] = None
+
+        # Control buttons (top-left)
+        from PyQt5.QtWidgets import QPushButton
+        
+        self._lock_btn = QPushButton("🔓", self)
+        self._lock_btn.setFixedSize(28, 28)
+        self._lock_btn.move(self._padding + 4, self._padding + 4)
+        self._lock_btn.setCursor(Qt.PointingHandCursor)
+        self._lock_btn.clicked.connect(self._toggle_lock)
+        self._lock_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: rgba(224, 229, 236, 180);
+                border: none;
+                border-radius: 14px;
+                font-size: 14px;
+            }}
+            QPushButton:hover {{
+                background-color: rgba(224, 229, 236, 220);
+            }}
+        """)
+        
+        self._passthrough_btn = QPushButton("👆", self)
+        self._passthrough_btn.setFixedSize(28, 28)
+        self._passthrough_btn.move(self._padding + 36, self._padding + 4)
+        self._passthrough_btn.setCursor(Qt.PointingHandCursor)
+        self._passthrough_btn.clicked.connect(self._toggle_passthrough)
+        self._passthrough_btn.setStyleSheet(self._lock_btn.styleSheet())
+        
+        self._passthrough = False
 
         logger.info("OverlayHUD created (size=%s, %dx%d)", size, w, h)
 
@@ -125,7 +155,8 @@ class OverlayHUD(QWidget):
                           eta: float,
                           progress: float,
                           current_idx: int,
-                          total: int):
+                          total: int,
+                          direction_to_target: float = 0.0):
         """
         更新所有导航数据
 
@@ -155,6 +186,7 @@ class OverlayHUD(QWidget):
         self._progress = progress
         self._current_index = current_idx
         self._total_targets = total
+        self._direction_to_target = direction_to_target
 
         # 计算缩放比
         if map_crop is not None:
@@ -355,7 +387,7 @@ class OverlayHUD(QWidget):
         painter.restore()
 
     def _draw_compass(self, painter: QPainter):
-        """绘制指北针 (右上角)"""
+        """绘制目标方向指示器 (右上角)"""
         painter.save()
 
         cx = self._map_rect.right() - 25
@@ -365,36 +397,28 @@ class OverlayHUD(QWidget):
         # 背景圆
         painter.setBrush(QColor(BG_PRIMARY))
         painter.setPen(QPen(QColor(TEXT_SECONDARY), 1.5))
-        painter.setOpacity(0.85)
-        painter.drawEllipse(QPointF(0, 0), 18, 18)
+        painter.setOpacity(0.9)
+        painter.drawEllipse(QPointF(0, 0), 20, 20)
         painter.setOpacity(self._opacity)
 
-        # 旋转指针 (反向, 保持北向上)
-        painter.rotate(-self._player_direction)
+        if self._target_rel_pos:
+            # 指向目标
+            painter.rotate(self._direction_to_target)
 
-        # 北向指针 (红色)
-        north = QPainterPath()
-        north.moveTo(0, -13)
-        north.lineTo(-4, 0)
-        north.lineTo(4, 0)
-        north.closeSubpath()
-        painter.setBrush(QColor(ERROR))
-        painter.setPen(Qt.NoPen)
-        painter.drawPath(north)
-
-        # 南向指针 (灰色)
-        south = QPainterPath()
-        south.moveTo(0, 13)
-        south.lineTo(-4, 0)
-        south.lineTo(4, 0)
-        south.closeSubpath()
-        painter.setBrush(QColor("#a0aec0"))
-        painter.drawPath(south)
-
-        # "N" 标记
-        painter.setPen(QColor(ERROR))
-        painter.setFont(QFont("Arial", 8, QFont.Bold))
-        painter.drawText(-4, -15, "N")
+            arrow = QPainterPath()
+            arrow.moveTo(0, -15)
+            arrow.lineTo(-5, 5)
+            arrow.lineTo(0, 1)
+            arrow.lineTo(5, 5)
+            arrow.closeSubpath()
+            painter.setBrush(QColor(SUCCESS))
+            painter.setPen(Qt.NoPen)
+            painter.drawPath(arrow)
+        else:
+            # 无目标时显示 N 标记
+            painter.setPen(QColor(TEXT_SECONDARY))
+            painter.setFont(QFont("Arial", 10, QFont.Bold))
+            painter.drawText(-5, 5, "N")
 
         painter.restore()
 
@@ -448,6 +472,21 @@ class OverlayHUD(QWidget):
         painter.restore()
 
     # ==================== 交互 ====================
+
+    def _toggle_lock(self):
+        self._locked = not self._locked
+        self._lock_btn.setText("🔒" if self._locked else "🔓")
+        self.lock_toggled.emit(self._locked)
+    
+    def _toggle_passthrough(self):
+        self._passthrough = not self._passthrough
+        if self._passthrough:
+            self.setWindowFlags(self.windowFlags() | Qt.WindowTransparentForInput)
+            self._passthrough_btn.setText("👇")
+        else:
+            self.setWindowFlags(self.windowFlags() & ~Qt.WindowTransparentForInput)
+            self._passthrough_btn.setText("👆")
+        self.show()  # Need to re-show after changing window flags
 
     def mousePressEvent(self, event: QMouseEvent):
         if event.button() == Qt.LeftButton and not self._locked:

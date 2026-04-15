@@ -183,7 +183,7 @@ class ResourceManager:
             results.append({
                 "x": r.x, "y": r.y,
                 "name": r.name, "type": r.type,
-                "id": r.id,
+                "id": r.id, "mark_type": r.mark_type,
             })
         return results
 

@@ -58,15 +58,18 @@ class NeumorphicButton(QPushButton):
                     color: #ffffff;
                     border: none;
                     border-radius: 12px;
-                    padding: 12px 24px;
-                    font-size: 14px;
+                    padding: 10px 20px;
+                    font-size: 13px;
                     font-weight: 600;
+                    font-family: "Microsoft YaHei", sans-serif;
                 }}
                 QPushButton:hover {{
                     background-color: {ACCENT_LIGHT};
                 }}
                 QPushButton:pressed {{
                     background-color: #5a6fd6;
+                    padding-left: 22px;
+                    padding-top: 12px;
                 }}
                 QPushButton:disabled {{
                     background-color: {TEXT_DISABLED};
@@ -78,23 +81,27 @@ class NeumorphicButton(QPushButton):
                 QPushButton {{
                     background-color: {BG_PRIMARY};
                     color: {TEXT_PRIMARY};
-                    border: none;
+                    border: 1px solid #d1d5db;
                     border-radius: 12px;
-                    padding: 12px 24px;
-                    font-size: 14px;
+                    padding: 10px 20px;
+                    font-size: 13px;
                     font-weight: 500;
+                    font-family: "Microsoft YaHei", sans-serif;
                 }}
                 QPushButton:hover {{
                     background-color: {BG_CARD};
+                    border-color: #c0c4ca;
                 }}
                 QPushButton:pressed {{
                     background-color: #d1d5db;
+                    padding-left: 22px;
+                    padding-top: 12px;
                 }}
                 QPushButton:disabled {{
                     color: {TEXT_DISABLED};
+                    border-color: #e2e6ea;
                 }}
             """)
-        apply_shadow(self, blur=12, offset_x=4, offset_y=4)
 
 
 class NeumorphicInput(QLineEdit):
@@ -106,24 +113,24 @@ class NeumorphicInput(QLineEdit):
         self.setMinimumHeight(40)
         self.setStyleSheet(f"""
             QLineEdit {{
-                background-color: {BG_PRIMARY};
+                background-color: #d8dce3;
                 color: {TEXT_PRIMARY};
-                border: none;
+                border: 1px solid #c8ccd2;
                 border-radius: 12px;
                 padding: 10px 16px;
-                font-size: 14px;
+                font-size: 13px;
+                font-family: "Microsoft YaHei", sans-serif;
                 selection-background-color: {ACCENT};
                 selection-color: #ffffff;
             }}
             QLineEdit:focus {{
                 background-color: {BG_CARD};
+                border-color: {ACCENT};
             }}
             QLineEdit:disabled {{
                 color: {TEXT_DISABLED};
             }}
         """)
-        # 内凹阴影效果 (用深色阴影模拟)
-        apply_shadow(self, blur=8, offset_x=2, offset_y=2, color="#c8ccd2")
 
 
 class NeumorphicCard(QFrame):
@@ -149,11 +156,10 @@ class NeumorphicPanel(QFrame):
         self.setStyleSheet(f"""
             QFrame {{
                 background-color: #d8dce3;
-                border: none;
+                border: 1px solid #c8ccd2;
                 border-radius: 12px;
             }}
         """)
-        apply_shadow(self, blur=8, offset_x=2, offset_y=2, color="#c0c4ca")
 
 
 class NeumorphicLabel(QLabel):
@@ -163,11 +169,11 @@ class NeumorphicLabel(QLabel):
         super().__init__(text, parent)
         
         styles = {
-            "title": f"color: {TEXT_PRIMARY}; font-size: 18px; font-weight: 700;",
-            "subtitle": f"color: {TEXT_PRIMARY}; font-size: 15px; font-weight: 600;",
-            "body": f"color: {TEXT_PRIMARY}; font-size: 14px;",
-            "caption": f"color: {TEXT_SECONDARY}; font-size: 12px;",
-            "section": f"color: {TEXT_SECONDARY}; font-size: 11px; font-weight: 600; letter-spacing: 1px;",
+            "title": f'color: {TEXT_PRIMARY}; font-size: 18px; font-weight: 700; font-family: "Microsoft YaHei", sans-serif;',
+            "subtitle": f'color: {TEXT_PRIMARY}; font-size: 15px; font-weight: 600; font-family: "Microsoft YaHei", sans-serif;',
+            "body": f'color: {TEXT_PRIMARY}; font-size: 14px; font-family: "Microsoft YaHei", sans-serif;',
+            "caption": f'color: {TEXT_SECONDARY}; font-size: 12px; font-family: "Microsoft YaHei", sans-serif;',
+            "section": f'color: {TEXT_SECONDARY}; font-size: 11px; font-weight: 600; letter-spacing: 1px; font-family: "Microsoft YaHei", sans-serif;',
         }
         self.setStyleSheet(f"QLabel {{ {styles.get(level, styles['body'])} background: transparent; }}")
 

@@ -59,8 +59,11 @@ class PathPlanner:
         if len(targets) == 1:
             return [start, targets[0]]
 
-        # Step 1: 最近邻
-        route = self.nearest_neighbor(start, targets)
+        # Step 1: 初始路线
+        if strategy == "greedy" and len(targets) <= 300:
+            route = self.greedy_insertion(start, targets)
+        else:
+            route = self.nearest_neighbor(start, targets)
 
         # Step 2: 2-opt 优化 (仅当点数合理时)
         if self._use_2opt and len(route) <= 200:
@@ -96,6 +99,57 @@ class PathPlanner:
             remaining.remove(nearest_pt)
             current = nearest_pt
 
+        return route
+
+    def greedy_insertion(self, start: Tuple[float, float],
+                         targets: List[Tuple[float, float]]
+                         ) -> List[Tuple[float, float]]:
+        """
+        贪心插入算法
+        
+        从起点出发，每次将未访问的点插入到路线中使总距离增加最少的位置。
+        比最近邻算法通常能得到更好的路线。
+        """
+        if not targets:
+            return [start]
+        if len(targets) == 1:
+            return [start, targets[0]]
+        
+        # Start with the farthest point from start
+        route = [start]
+        remaining = list(targets)
+        
+        # Add first point: nearest to start
+        first = min(remaining, key=lambda p: distance(start, p))
+        route.append(first)
+        remaining.remove(first)
+        
+        while remaining:
+            best_cost = float('inf')
+            best_point = None
+            best_pos = 1
+            
+            for pt in remaining:
+                # Try inserting pt at each position in route
+                for i in range(1, len(route)):
+                    # Cost of inserting between route[i-1] and route[i]
+                    cost = (distance(route[i-1], pt) + distance(pt, route[i]) 
+                            - distance(route[i-1], route[i]))
+                    if cost < best_cost:
+                        best_cost = cost
+                        best_point = pt
+                        best_pos = i
+                
+                # Also try appending at end
+                cost = distance(route[-1], pt)
+                if cost < best_cost:
+                    best_cost = cost
+                    best_point = pt
+                    best_pos = len(route)
+            
+            route.insert(best_pos, best_point)
+            remaining.remove(best_point)
+        
         return route
 
     def optimize_2opt(self, route: List[Tuple[float, float]]

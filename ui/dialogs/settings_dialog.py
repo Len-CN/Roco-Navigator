@@ -10,7 +10,7 @@ from PyQt5.QtWidgets import (
     QSpinBox, QDoubleSpinBox, QCheckBox, QComboBox,
     QTabWidget, QWidget, QScrollArea
 )
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, pyqtSignal
 
 from roco_navigator.config.settings import Settings
 from roco_navigator.ui.widgets.neumorphic import (
@@ -24,6 +24,8 @@ logger = logging.getLogger(__name__)
 
 class SettingsDialog(QDialog):
     """设置对话框"""
+
+    settings_changed = pyqtSignal()
 
     def __init__(self, settings: Settings, parent=None):
         super().__init__(parent)
@@ -226,7 +228,7 @@ class SettingsDialog(QDialog):
 
         # Route strategy
         self._strategy = QComboBox()
-        self._strategy.addItems(["nearest", "optimal"])
+        self._strategy.addItems(["nearest", "greedy", "optimal"])
         current = self._settings.get("navigation.route_strategy", "nearest")
         idx = self._strategy.findText(current)
         if idx >= 0:
@@ -259,4 +261,5 @@ class SettingsDialog(QDialog):
         self._settings.set("navigation.use_2opt", self._use_2opt.isChecked())
         self._settings.save()
         logger.info("Settings saved")
+        self.settings_changed.emit()
         self.accept()

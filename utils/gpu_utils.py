@@ -24,21 +24,55 @@ class GPUManager:
     
     def _check_gpu(self) -> None:
         """检测 GPU 是否可用"""
+        # Method 1: OpenCV CUDA
         try:
             import cv2
-            self.device_count = cv2.cuda.getCudaEnabledDeviceCount()
-            if self.device_count > 0:
+            count = cv2.cuda.getCudaEnabledDeviceCount()
+            if count > 0:
                 self.gpu_available = True
+                self.device_count = count
                 self._gather_device_info()
-                logger.info(f"检测到 {self.device_count} 个 CUDA 设备")
-            else:
-                logger.info("未检测到 CUDA 设备，将使用 CPU 模式")
-        except AttributeError:
-            logger.info("OpenCV 未包含 CUDA 模块，将使用 CPU 模式")
-            self.gpu_available = False
-        except Exception as e:
-            logger.info(f"GPU 检测异常: {e}，将使用 CPU 模式")
-            self.gpu_available = False
+                logger.info("CUDA available via OpenCV: %d device(s)", count)
+                return
+        except (AttributeError, Exception):
+            pass
+        
+        # Method 2: PyTorch CUDA
+        try:
+            import torch
+            if torch.cuda.is_available():
+                self.gpu_available = True
+                self.device_count = torch.cuda.device_count()
+                for i in range(self.device_count):
+                    self._device_info[i] = {
+                        "device_id": i,
+                        "name": torch.cuda.get_device_name(i)
+                    }
+                logger.info("CUDA available via PyTorch: %d device(s)", self.device_count)
+                return
+        except ImportError:
+            pass
+        
+        # Method 3: Check nvidia-smi
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                gpus = result.stdout.strip().split('\n')
+                self.gpu_available = True
+                self.device_count = len(gpus)
+                for i, name in enumerate(gpus):
+                    self._device_info[i] = {"device_id": i, "name": name.strip()}
+                logger.info("GPU detected via nvidia-smi: %s", gpus)
+                return
+        except (FileNotFoundError, subprocess.TimeoutExpired, Exception):
+            pass
+        
+        logger.info("No GPU detected, using CPU mode")
+        self.gpu_available = False
     
     def _gather_device_info(self) -> None:
         """收集 GPU 设备信息"""
