@@ -89,23 +89,19 @@ def main():
     
     # 启动 PyQt5 应用
     from PyQt5.QtWidgets import QApplication
-    
+    from roco_navigator.ui.main_window import MainWindow
+
     app = QApplication(sys.argv)
     app.setApplicationName("Roco Navigator")
     app.setApplicationVersion("0.1.0")
-    
-    # TODO: 阶段 1 将实现主窗口
-    # from roco_navigator.ui.main_window import MainWindow
-    # window = MainWindow(settings)
-    # window.show()
-    
-    logger.info("Roco Navigator 已启动 (阶段 0 - 框架初始化)")
-    logger.info("主窗口将在阶段 1 中实现")
-    
-    # 暂时直接退出，阶段 1 将进入事件循环
-    # sys.exit(app.exec_())
-    logger.info("阶段 0 验证完成，程序正常退出")
-    sys.exit(0)
+
+    # 创建并显示主窗口
+    window = MainWindow(settings)
+    window.show()
+
+    logger.info("Roco Navigator 主窗口已启动")
+
+    sys.exit(app.exec_())
 
 
 if __name__ == "__main__":
