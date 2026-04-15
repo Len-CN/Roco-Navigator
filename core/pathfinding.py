@@ -62,8 +62,8 @@ class PathPlanner:
         # Step 1: 最近邻
         route = self.nearest_neighbor(start, targets)
 
-        # Step 2: 2-opt 优化
-        if strategy == "optimal" or (strategy == "nearest" and self._use_2opt):
+        # Step 2: 2-opt 优化 (仅当点数合理时)
+        if self._use_2opt and len(route) <= 200:
             route = self.optimize_2opt(route)
 
         dist = total_distance(route)
@@ -101,16 +101,10 @@ class PathPlanner:
     def optimize_2opt(self, route: List[Tuple[float, float]]
                       ) -> List[Tuple[float, float]]:
         """
-        2-opt 局部优化
-
-        通过反转路径中的子段来减少总距离。
-
-        Args:
-            route: 初始路线
-
-        Returns:
-            优化后的路线
+        2-opt 局部优化 (带时间限制)
         """
+        import time
+        
         if len(route) < 4:
             return route
 
@@ -118,14 +112,19 @@ class PathPlanner:
         best_dist = total_distance(best)
         improved = True
         iterations = 0
+        start_time = time.perf_counter()
+        max_time = 2.0  # 最多2秒
 
         while improved and iterations < self._max_iterations:
             improved = False
             iterations += 1
 
+            if time.perf_counter() - start_time > max_time:
+                logger.debug("2-opt: time limit reached at iteration %d", iterations)
+                break
+
             for i in range(1, len(best) - 2):
                 for j in range(i + 2, len(best)):
-                    # 尝试反转 i 到 j 之间的路径
                     new_route = best[:i] + best[i:j][::-1] + best[j:]
                     new_dist = total_distance(new_route)
 

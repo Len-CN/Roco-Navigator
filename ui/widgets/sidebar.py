@@ -59,7 +59,7 @@ class Sidebar(QWidget):
     calibrate_clicked = pyqtSignal()
     start_tracking_clicked = pyqtSignal()
     stop_tracking_clicked = pyqtSignal()
-    plan_route_clicked = pyqtSignal()
+
     start_nav_clicked = pyqtSignal()
     stop_nav_clicked = pyqtSignal()
     update_points_clicked = pyqtSignal()
@@ -147,10 +147,6 @@ class Sidebar(QWidget):
 
         # ---- 导航控制 ----
         nav_section = SidebarSection("导航")
-
-        self._plan_btn = NeumorphicButton("规划路线")
-        self._plan_btn.clicked.connect(self.plan_route_clicked.emit)
-        nav_section.add_widget(self._plan_btn)
 
         nav_row = QHBoxLayout()
         nav_row.setSpacing(8)

@@ -67,6 +67,26 @@ class WikiUpdateWorker(QThread):
         self.finished.emit(success, msg)
 
 
+class RouteWorker(QThread):
+    """路线规划后台线程"""
+    finished = pyqtSignal(list, float, list)
+
+    def __init__(self, planner, start_pos, resources, strategy):
+        super().__init__()
+        self._planner = planner
+        self._start = start_pos or (resources[0]["x"], resources[0]["y"])
+        self._resources = resources
+        self._strategy = strategy
+
+    def run(self):
+        from roco_navigator.core.pathfinding import total_distance
+        targets = [(r["x"], r["y"]) for r in self._resources]
+        names = [r.get("name", "") for r in self._resources]
+        route = self._planner.plan_route(self._start, targets, self._strategy)
+        dist = total_distance(route)
+        self.finished.emit(route, dist, names)
+
+
 # ==================== 状态栏 ====================
 
 class StatusBarWidget(QWidget):
@@ -269,7 +289,6 @@ class MainWindow(QMainWindow):
         self._sidebar.calibrate_clicked.connect(self._on_calibrate)
         self._sidebar.start_tracking_clicked.connect(self._on_start_tracking)
         self._sidebar.stop_tracking_clicked.connect(self._on_stop_tracking)
-        self._sidebar.plan_route_clicked.connect(self._on_plan_route)
         self._sidebar.start_nav_clicked.connect(self._on_start_nav)
         self._sidebar.stop_nav_clicked.connect(self._on_stop_nav)
         self._sidebar.update_points_clicked.connect(self._on_update_points)
@@ -384,39 +403,6 @@ class MainWindow(QMainWindow):
 
     # ==================== Navigation ====================
 
-    def _on_plan_route(self):
-        """规划路线"""
-        resources = self._resource_manager.to_display_list()
-        if not resources:
-            QMessageBox.information(self, "提示",
-                                    "暂无资源数据。\n"
-                                    "请从 WIKI 更新或手动添加资源。")
-            return
-
-        targets = [(r["x"], r["y"]) for r in resources]
-        names = [r["name"] for r in resources]
-        start = self._tracker.position or (0, 0)
-
-        strategy = self._settings.get("navigation.route_strategy", "nearest")
-        route = self._path_planner.plan_route(start, targets, strategy)
-        dist = total_distance(route)
-
-        # 保存路线
-        route_obj = Route(
-            id=f"auto_{len(self._route_manager.get_all()) + 1}",
-            name=f"自动路线 ({len(route) - 1} 个点)",
-            targets=route[1:],
-            total_distance=dist,
-            strategy=strategy,
-        )
-        self._route_manager.add(route_obj)
-
-        # 显示在地图上
-        self._map_canvas.set_route([(p[0], p[1]) for p in route])
-
-        self._sidebar.set_nav_progress(0, f"路线: {len(route)-1} 个目标, {dist:.0f}px")
-        logger.info("Route planned: %d targets, %.0f total distance", len(route) - 1, dist)
-
     def _on_filter_type_changed(self, type_filter: str):
         """点位类型筛选"""
         display = self._resource_manager.to_display_list(type_filter=type_filter if type_filter else None)
@@ -434,25 +420,40 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "提示", "当前筛选条件下没有资源点。")
             return
 
-        targets = [(r["x"], r["y"]) for r in resources]
-        names = [r["name"] for r in resources]
-        start = self._tracker.position or (targets[0][0], targets[0][1])
+        if len(resources) > 500:
+            QMessageBox.information(self, "提示",
+                                    f"当前筛选有 {len(resources)} 个点位，数量过多。\n"
+                                    "请选择具体的资源类型进行规划。")
+            return
 
-        strategy = self._settings.get("navigation.route_strategy", "nearest")
-        route = self._path_planner.plan_route(start, targets, strategy)
-        dist = total_distance(route)
+        self._sidebar.set_nav_progress(0, "正在规划路线...")
 
+        # Run in background
+        self._route_worker = RouteWorker(
+            self._path_planner, self._tracker.position, resources,
+            self._settings.get("navigation.route_strategy", "nearest")
+        )
+        self._route_worker.finished.connect(self._on_route_planned)
+        self._route_worker.start()
+
+    def _on_route_planned(self, route, dist, names):
+        """路线规划完成回调"""
+        if not route or len(route) < 2:
+            self._sidebar.set_nav_progress(0, "规划失败")
+            return
+
+        type_name = self._sidebar._type_filter.currentText()
         route_obj = Route(
             id=f"auto_{len(self._route_manager.get_all()) + 1}",
-            name=f"{'全部' if not type_filter else type_filter} ({len(route) - 1} 个点)",
+            name=f"{type_name} ({len(route) - 1} 个点)",
             targets=route[1:],
             total_distance=dist,
-            strategy=strategy,
+            strategy="nearest",
         )
         self._route_manager.add(route_obj)
         self._map_canvas.set_route([(p[0], p[1]) for p in route])
         self._sidebar.set_nav_progress(0, f"路线: {len(route)-1} 个目标, {dist:.0f}px")
-        logger.info("Route planned for type '%s': %d targets", type_filter, len(route)-1)
+        logger.info("Route planned: %d targets, %.0f distance", len(route) - 1, dist)
 
     def _on_start_nav(self):
         """开始导航"""
