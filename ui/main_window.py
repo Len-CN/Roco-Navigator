@@ -610,8 +610,10 @@ class MainWindow(QMainWindow):
     # ==================== Settings ====================
 
     def _on_settings(self):
-        logger.info("Settings requested")
-        # Settings dialog would go here in a future stage
+        """打开设置对话框"""
+        from roco_navigator.ui.dialogs.settings_dialog import SettingsDialog
+        dialog = SettingsDialog(self._settings, self)
+        dialog.exec_()
 
     # ==================== Misc ====================
 

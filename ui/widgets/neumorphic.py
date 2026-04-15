@@ -47,7 +47,7 @@ class NeumorphicButton(QPushButton):
         super().__init__(text, parent)
         self._primary = primary
         self.setCursor(Qt.PointingHandCursor)
-        self.setMinimumHeight(40)
+        self.setMinimumHeight(44)
         self._apply_style()
 
     def _apply_style(self):
@@ -58,7 +58,7 @@ class NeumorphicButton(QPushButton):
                     color: #ffffff;
                     border: none;
                     border-radius: 12px;
-                    padding: 10px 24px;
+                    padding: 12px 24px;
                     font-size: 14px;
                     font-weight: 600;
                 }}
@@ -80,7 +80,7 @@ class NeumorphicButton(QPushButton):
                     color: {TEXT_PRIMARY};
                     border: none;
                     border-radius: 12px;
-                    padding: 10px 24px;
+                    padding: 12px 24px;
                     font-size: 14px;
                     font-weight: 500;
                 }}

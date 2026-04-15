@@ -52,7 +52,7 @@ class WikiUpdater:
     )
 
     # Tile grid bounds (tiles go from -bound to +bound on each axis)
-    TILE_BOUND = 4
+    TILE_BOUND = 8
 
     def __init__(self):
         self._session = requests.Session()
@@ -347,14 +347,13 @@ class WikiUpdater:
         """
         points = []
 
-        # Strategy 1: embedded in page
+        # Strategy 1: embedded in main page
         try:
             soup = BeautifulSoup(html, "lxml")
             point_div = soup.find("div", id="mapPointData")
             if point_div:
                 text = point_div.get_text(strip=True)
-                data = json.loads(text)
-                points = self._parse_points(data)
+                points = self._parse_point_text(text)
                 if points:
                     logger.info("Parsed %d points from embedded data", len(points))
                     return points
@@ -366,69 +365,147 @@ class WikiUpdater:
             resp = self._session.get(self.POINT_DATA_URL, timeout=15)
             if resp.status_code == 200:
                 resp.encoding = "utf-8"
-                page_html = resp.text
-                soup2 = BeautifulSoup(page_html, "lxml")
+                soup2 = BeautifulSoup(resp.text, "lxml")
                 point_div2 = soup2.find("div", id="mapPointData")
                 if point_div2:
                     text = point_div2.get_text(strip=True)
-                    data = json.loads(text)
-                    points = self._parse_points(data)
+                    points = self._parse_point_text(text)
                     if points:
                         logger.info("Parsed %d points from point.json page", len(points))
                         return points
         except Exception as e:
             logger.debug("Failed to fetch point.json page: %s", e)
 
-        # Strategy 3: use MediaWiki API
-        try:
-            api_url = "https://wiki.biligame.com/rocom/api.php"
-            params = {
-                "action": "query",
-                "titles": "Data:Mapnew/point.json",
-                "prop": "revisions",
-                "rvprop": "content",
-                "format": "json",
-            }
-            resp = self._session.get(api_url, params=params, timeout=15)
-            if resp.status_code == 200:
-                api_data = resp.json()
-                pages = api_data.get("query", {}).get("pages", {})
-                for page in pages.values():
-                    revisions = page.get("revisions", [])
-                    if revisions:
-                        content = revisions[0].get("*", "")
-                        # The content might have the data embedded in HTML
-                        soup3 = BeautifulSoup(content, "lxml")
-                        point_div3 = soup3.find("div", id="mapPointData")
-                        if point_div3:
-                            data = json.loads(point_div3.get_text(strip=True))
-                            points = self._parse_points(data)
-                            logger.info("Parsed %d points from API", len(points))
-                            return points
-        except Exception as e:
-            logger.debug("API point fetch failed: %s", e)
-
         logger.warning("No point data could be fetched")
         return points
 
-    def _parse_points(self, data) -> List[Dict]:
-        """Parse point data from JSON structure"""
+    def _parse_point_text(self, text: str) -> List[Dict]:
+        """
+        Parse the raw point data text from #mapPointData.
+
+        The text format is like:
+        { 201:[{...},{...}], 302:[{...}], 50002:Data:Mapnew/type/50002/json, ... }
+
+        Some markType values are unresolved wiki templates (not arrays).
+        We extract only the valid JSON array segments.
+        """
         points = []
-        items = []
+
+        # Use regex to find all valid array segments: "DIGITS":[{...}]
+        # First quote the numeric keys
+        text = re.sub(r'(?<=\{)\s*(\d+)\s*:', r' "\1":', text)
+        text = re.sub(r',\s*(\d+)\s*:', r', "\1":', text)
+
+        # Extract each markType's array using regex
+        # Pattern: "DIGITS": [ ... ] (match balanced brackets)
+        pattern = r'"(\d+)"\s*:\s*(\[.*?\])\s*(?=[,}])'
+        for match in re.finditer(pattern, text, re.DOTALL):
+            mark_type_id = match.group(1)
+            array_str = match.group(2)
+            try:
+                items = json.loads(array_str)
+                for item in items:
+                    pt = self._extract_point(item, int(mark_type_id))
+                    if pt:
+                        points.append(pt)
+            except json.JSONDecodeError:
+                continue
+
+        if not points:
+            # Fallback: try finding individual point objects
+            obj_pattern = r'\{[^{}]*"markType"\s*:\s*\d+[^{}]*"point"\s*:\s*\{[^{}]*\}[^{}]*\}'
+            for match in re.finditer(obj_pattern, text):
+                try:
+                    item = json.loads(match.group(0))
+                    pt = self._extract_point(item)
+                    if pt:
+                        points.append(pt)
+                except json.JSONDecodeError:
+                    continue
+
+        return points
+
+    def _extract_point(self, item: dict, default_mark_type: int = 0) -> Optional[Dict]:
+        """Extract a single point from item dict."""
+        try:
+            point_data = item.get("point", {})
+            x = float(point_data.get("lng", item.get("lng", item.get("x", 0))))
+            y = float(point_data.get("lat", item.get("lat", item.get("y", 0))))
+
+            if x == 0 and y == 0:
+                return None
+
+            return {
+                "id": str(item.get("id", item.get("pointId", ""))),
+                "name": item.get("title", item.get("name", "")),
+                "mark_type": int(item.get("markType", default_mark_type)),
+                "x": x,
+                "y": y,
+                "desc": item.get("desc", item.get("description", "")),
+            }
+        except (ValueError, TypeError):
+            return None
+
+    def _parse_points(self, data) -> List[Dict]:
+        """Parse point data from JSON structure.
+
+        The WIKI data is structured as:
+        { "201": [{"markType":201, "title":"", "id":"...", "point":{"lat":..., "lng":...}}, ...],
+          "302": [...], ... }
+
+        Keys are markType IDs, values are lists of point objects.
+        Coordinates are in point.lng (x) and point.lat (y).
+        """
+        points = []
 
         if isinstance(data, dict):
-            items = data.get("data", data.get("points", []))
+            # Check if this is a markType->pointList dict (keys are numeric strings)
+            # vs a wrapper dict with "data" or "points" key
+            has_list_values = any(isinstance(v, list) for v in data.values())
+            if has_list_values and not data.get("data") and not data.get("points"):
+                # Dict of markType ID -> list of points
+                for mark_type_id, point_list in data.items():
+                    if isinstance(point_list, list):
+                        for item in point_list:
+                            try:
+                                pt = item.get("point", {})
+                                point = {
+                                    "id": str(item.get("id", "")),
+                                    "name": item.get("title", ""),
+                                    "mark_type": int(item.get("markType", mark_type_id)),
+                                    "x": float(pt.get("lng", 0)),
+                                    "y": float(pt.get("lat", 0)),
+                                    "desc": item.get("desc", item.get("description", "")),
+                                }
+                                if point["id"]:
+                                    points.append(point)
+                            except (ValueError, TypeError):
+                                continue
+                return points
+            else:
+                # Legacy wrapper: { "data": [...] } or { "points": [...] }
+                items = data.get("data", data.get("points", []))
         elif isinstance(data, list):
             items = data
+        else:
+            return points
 
+        # Fallback: flat list of point items
         for item in items:
             try:
+                pt = item.get("point", {})
+                if pt:
+                    x = float(pt.get("lng", 0))
+                    y = float(pt.get("lat", 0))
+                else:
+                    x = float(item.get("x", item.get("lng", 0)))
+                    y = float(item.get("y", item.get("lat", 0)))
                 point = {
                     "id": str(item.get("id", item.get("pointId", ""))),
-                    "name": item.get("name", item.get("title", "")),
+                    "name": item.get("title", item.get("name", "")),
                     "mark_type": int(item.get("markType", item.get("mark_type", 0))),
-                    "x": float(item.get("x", item.get("lng", 0))),
-                    "y": float(item.get("y", item.get("lat", 0))),
+                    "x": x,
+                    "y": y,
                     "desc": item.get("desc", item.get("description", "")),
                 }
                 if point["id"]:

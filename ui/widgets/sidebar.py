@@ -32,7 +32,7 @@ class SidebarSection(QWidget):
         super().__init__(parent)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 8)
-        layout.setSpacing(8)
+        layout.setSpacing(10)
 
         # 区段标题
         self._title = NeumorphicLabel(title.upper(), level="section")
@@ -107,8 +107,8 @@ class Sidebar(QWidget):
         content = QWidget()
         content.setStyleSheet("background: transparent;")
         content_layout = QVBoxLayout(content)
-        content_layout.setContentsMargins(16, 16, 16, 16)
-        content_layout.setSpacing(16)
+        content_layout.setContentsMargins(16, 20, 16, 20)
+        content_layout.setSpacing(20)
 
         # ---- 追踪控制 ----
         tracking_section = SidebarSection("位置追踪")
@@ -130,6 +130,7 @@ class Sidebar(QWidget):
 
         # 开始/停止追踪
         track_row = QHBoxLayout()
+        track_row.setSpacing(8)
         self._start_track_btn = NeumorphicButton("开始", primary=True)
         self._stop_track_btn = NeumorphicButton("停止")
         self._stop_track_btn.setEnabled(False)
@@ -150,6 +151,7 @@ class Sidebar(QWidget):
         nav_section.add_widget(self._plan_btn)
 
         nav_row = QHBoxLayout()
+        nav_row.setSpacing(8)
         self._start_nav_btn = NeumorphicButton("开始导航", primary=True)
         self._stop_nav_btn = NeumorphicButton("停止")
         self._stop_nav_btn.setEnabled(False)
