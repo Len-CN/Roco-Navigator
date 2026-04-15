@@ -51,8 +51,16 @@ class WikiUpdater:
         "Chrome/120.0.0.0 Safari/537.36"
     )
 
-    # Tile grid bounds (tiles go from -bound to +bound on each axis)
-    TILE_BOUND = 8
+    # Tile ranges at zoom 6 (probed from actual WIKI data)
+    TILE_X_MIN = -6
+    TILE_X_MAX = 5
+    TILE_Y_MIN = -5
+    TILE_Y_MAX = 4
+    
+    # Coordinate conversion: Leaflet CRS.Simple with resolution=2 at zoom 6
+    # point.lng -> pixel_x: px = (lng - origin_lng) / resolution
+    # point.lat -> pixel_y: py = (origin_lat_top - lat) / resolution
+    COORD_RESOLUTION = 2  # pixels per world unit at zoom 6
 
     def __init__(self):
         self._session = requests.Session()
@@ -98,10 +106,8 @@ class WikiUpdater:
             if progress_callback:
                 progress_callback(0, f"Starting map download (zoom={zoom})...")
 
-            bound = self.TILE_BOUND
-            # Tile indices go from -bound to bound (inclusive)
-            x_range = range(-bound, bound + 1)
-            y_range = range(-bound, bound + 1)
+            x_range = range(self.TILE_X_MIN, self.TILE_X_MAX + 1)
+            y_range = range(self.TILE_Y_MIN, self.TILE_Y_MAX + 1)
             total_tiles = len(x_range) * len(y_range)
 
             # Download all tiles
@@ -154,8 +160,8 @@ class WikiUpdater:
 
             for (tx, ty), tile_img in tiles.items():
                 # Convert tile coord to pixel position
-                px = (tx - (-bound)) * tw
-                py = (ty - (-bound)) * th
+                px = (tx - self.TILE_X_MIN) * tw
+                py = (ty - self.TILE_Y_MIN) * th
                 full_map.paste(tile_img, (px, py))
 
             # Save as PNG
@@ -584,6 +590,37 @@ class WikiUpdater:
             return []
         return [f for f in os.listdir(self._maps_dir)
                 if f.endswith(('.png', '.jpg'))]
+
+    def world_to_pixel(self, lng: float, lat: float, zoom: int = 6) -> Tuple[float, float]:
+        """
+        Convert Leaflet world coordinates (lng, lat) to pixel coordinates
+        in the stitched map image.
+        
+        Leaflet CRS.Simple with resolution=2 at zoom 6:
+        - Each tile covers 512 world units (256 pixels * 2 resolution)
+        - lng increases rightward (x), lat increases upward (y inverted for image)
+        """
+        tile_size = 256
+        res = self.COORD_RESOLUTION
+        
+        origin_lng = self.TILE_X_MIN * tile_size * res
+        origin_lat_top = -(self.TILE_Y_MIN * tile_size * res)
+        
+        pixel_x = (lng - origin_lng) / res
+        pixel_y = (origin_lat_top - lat) / res
+        return (pixel_x, pixel_y)
+    
+    def pixel_to_world(self, px: float, py: float, zoom: int = 6) -> Tuple[float, float]:
+        """Convert pixel coordinates back to Leaflet world coordinates."""
+        tile_size = 256
+        res = self.COORD_RESOLUTION
+        
+        origin_lng = self.TILE_X_MIN * tile_size * res
+        origin_lat_top = -(self.TILE_Y_MIN * tile_size * res)
+        
+        lng = px * res + origin_lng
+        lat = origin_lat_top - py * res
+        return (lng, lat)
 
     @property
     def is_updating(self) -> bool:

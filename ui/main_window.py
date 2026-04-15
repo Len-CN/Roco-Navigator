@@ -12,8 +12,8 @@ from PyQt5.QtWidgets import (
     QLabel, QMessageBox, QGraphicsDropShadowEffect,
     QApplication, QSizePolicy, QFrame
 )
-from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal
-from PyQt5.QtGui import QColor, QResizeEvent
+from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal, QRectF
+from PyQt5.QtGui import QColor, QResizeEvent, QPainter, QPainterPath, QBrush
 
 from roco_navigator.config.settings import Settings
 from roco_navigator.ui.widgets.title_bar import TitleBar
@@ -128,6 +128,26 @@ class StatusBarWidget(QWidget):
         self._pos_label.setText("位置: --")
 
 
+# ==================== 圆角中央容器 ====================
+
+class RoundedCentralWidget(QWidget):
+    """圆角中央容器 - 手动绘制圆角背景，防止子控件突破圆角"""
+
+    def __init__(self, bg_color: str, radius: int = 16, parent=None):
+        super().__init__(parent)
+        self._bg_color = QColor(bg_color)
+        self._radius = radius
+        self.setAttribute(Qt.WA_TranslucentBackground)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(self.rect()), self._radius, self._radius)
+        painter.setClipPath(path)
+        painter.fillPath(path, self._bg_color)
+
+
 # ==================== 主窗口 ====================
 
 class MainWindow(QMainWindow):
@@ -142,11 +162,11 @@ class MainWindow(QMainWindow):
 
         # 无边框窗口
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window)
-        self.setAttribute(Qt.WA_TranslucentBackground, False)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setMinimumSize(self.MIN_WIDTH, self.MIN_HEIGHT)
         self.resize(1200, 800)
         self.setWindowTitle("洛克导航")
-        self.setStyleSheet(f"QMainWindow {{ background-color: {BG_PRIMARY}; }}")
+        self.setStyleSheet("QMainWindow { background: transparent; }")
 
         # ---- 初始化核心模块 ----
         self._screen_capture = ScreenCapture()
@@ -213,8 +233,7 @@ class MainWindow(QMainWindow):
 
     def _setup_ui(self):
         """构建 UI 布局"""
-        central = QWidget()
-        central.setStyleSheet(f"background-color: {BG_PRIMARY}; border-radius: 16px;")
+        central = RoundedCentralWidget(BG_PRIMARY, radius=16)
         self.setCentralWidget(central)
 
         main_layout = QVBoxLayout(central)
@@ -227,7 +246,7 @@ class MainWindow(QMainWindow):
 
         # 内容区域
         content = QWidget()
-        content.setStyleSheet(f"background-color: {BG_PRIMARY};")
+        content.setStyleSheet("background: transparent;")
         content_layout = QHBoxLayout(content)
         content_layout.setContentsMargins(12, 8, 12, 8)
         content_layout.setSpacing(12)
@@ -257,6 +276,8 @@ class MainWindow(QMainWindow):
         self._sidebar.update_map_clicked.connect(self._on_update_map)
         self._sidebar.toggle_overlay_clicked.connect(self._on_toggle_overlay)
         self._sidebar.settings_clicked.connect(self._on_settings)
+        self._sidebar.filter_type_changed.connect(self._on_filter_type_changed)
+        self._sidebar.plan_route_for_type.connect(self._on_plan_route_for_type)
 
     # ==================== Tracking ====================
 
@@ -395,6 +416,43 @@ class MainWindow(QMainWindow):
 
         self._sidebar.set_nav_progress(0, f"路线: {len(route)-1} 个目标, {dist:.0f}px")
         logger.info("Route planned: %d targets, %.0f total distance", len(route) - 1, dist)
+
+    def _on_filter_type_changed(self, type_filter: str):
+        """点位类型筛选"""
+        display = self._resource_manager.to_display_list(type_filter=type_filter if type_filter else None)
+        self._map_canvas.set_resources(display)
+        logger.info("Filter changed: %s (%d points)", type_filter or "all", len(display))
+
+    def _on_plan_route_for_type(self, type_filter: str):
+        """为指定类型的资源规划路线"""
+        if type_filter:
+            resources = self._resource_manager.to_display_list(type_filter=type_filter)
+        else:
+            resources = self._resource_manager.to_display_list()
+
+        if not resources:
+            QMessageBox.information(self, "提示", "当前筛选条件下没有资源点。")
+            return
+
+        targets = [(r["x"], r["y"]) for r in resources]
+        names = [r["name"] for r in resources]
+        start = self._tracker.position or (targets[0][0], targets[0][1])
+
+        strategy = self._settings.get("navigation.route_strategy", "nearest")
+        route = self._path_planner.plan_route(start, targets, strategy)
+        dist = total_distance(route)
+
+        route_obj = Route(
+            id=f"auto_{len(self._route_manager.get_all()) + 1}",
+            name=f"{'全部' if not type_filter else type_filter} ({len(route) - 1} 个点)",
+            targets=route[1:],
+            total_distance=dist,
+            strategy=strategy,
+        )
+        self._route_manager.add(route_obj)
+        self._map_canvas.set_route([(p[0], p[1]) for p in route])
+        self._sidebar.set_nav_progress(0, f"路线: {len(route)-1} 个目标, {dist:.0f}px")
+        logger.info("Route planned for type '%s': %d targets", type_filter, len(route)-1)
 
     def _on_start_nav(self):
         """开始导航"""
@@ -557,12 +615,16 @@ class MainWindow(QMainWindow):
         for pt in points:
             mt_id = pt.get("mark_type", 0)
             mt_info = mark_type_map.get(mt_id, {})
+            # Convert Leaflet coords (lng, lat) to pixel coords
+            lng = pt.get("x", 0)
+            lat = pt.get("y", 0)
+            px, py = self._wiki_updater.world_to_pixel(lng, lat)
             self._resource_manager.add(Resource(
                 id=pt.get("id", ""),
                 name=pt.get("name", mt_info.get("mark_type_name", "")),
                 type=mt_info.get("type", ""),
-                x=pt.get("x", 0),
-                y=pt.get("y", 0),
+                x=px,
+                y=py,
                 mark_type=mt_id,
                 icon_url=mt_info.get("icon_url", ""),
                 description=pt.get("desc", ""),
@@ -573,6 +635,10 @@ class MainWindow(QMainWindow):
         self._map_canvas.set_resources(self._resource_manager.to_display_list())
         self._sidebar.set_data_info(f"已从 WIKI 加载 {count} 个点位")
         logger.info("Loaded %d points from cache", count)
+
+        # Populate type filter
+        types = self._resource_manager.get_types()
+        self._sidebar.set_type_filter_items(types)
 
     def _update_data_info(self):
         """更新数据状态显示"""

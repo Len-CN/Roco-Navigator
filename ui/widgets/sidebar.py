@@ -64,6 +64,8 @@ class Sidebar(QWidget):
     stop_nav_clicked = pyqtSignal()
     update_points_clicked = pyqtSignal()
     update_map_clicked = pyqtSignal()
+    filter_type_changed = pyqtSignal(str)   # resource type filter changed
+    plan_route_for_type = pyqtSignal(str)   # plan route for a specific type
     toggle_overlay_clicked = pyqtSignal(bool)
     settings_clicked = pyqtSignal()
 
@@ -202,16 +204,54 @@ class Sidebar(QWidget):
         content_layout.addWidget(display_section)
         content_layout.addWidget(NeumorphicSeparator())
 
-        # ---- 数据管理 ----
+        # ---- 数据 ----
         data_section = SidebarSection("数据")
 
+        update_row = QHBoxLayout()
+        update_row.setSpacing(8)
         self._update_points_btn = NeumorphicButton("更新点位", primary=True)
         self._update_points_btn.clicked.connect(self.update_points_clicked.emit)
-        data_section.add_widget(self._update_points_btn)
+        update_row.addWidget(self._update_points_btn)
 
         self._update_map_btn = NeumorphicButton("更新地图")
         self._update_map_btn.clicked.connect(self.update_map_clicked.emit)
-        data_section.add_widget(self._update_map_btn)
+        update_row.addWidget(self._update_map_btn)
+        data_section.add_layout(update_row)
+
+        # 点位类型筛选
+        filter_label = NeumorphicLabel("点位筛选:", level="caption")
+        data_section.add_widget(filter_label)
+
+        self._type_filter = QComboBox()
+        self._type_filter.setStyleSheet(f"""
+            QComboBox {{
+                background-color: {BG_PRIMARY};
+                color: {TEXT_PRIMARY};
+                border: none;
+                border-radius: 8px;
+                padding: 8px 12px;
+                font-size: 13px;
+            }}
+            QComboBox::drop-down {{
+                border: none;
+                width: 20px;
+            }}
+            QComboBox QAbstractItemView {{
+                background-color: {BG_SECONDARY};
+                color: {TEXT_PRIMARY};
+                selection-background-color: {ACCENT};
+                selection-color: white;
+                border-radius: 4px;
+            }}
+        """)
+        self._type_filter.addItem("全部类型")
+        self._type_filter.currentTextChanged.connect(self._on_filter_changed)
+        data_section.add_widget(self._type_filter)
+
+        # 路线规划按钮
+        self._plan_for_type_btn = NeumorphicButton("为当前类型规划路线")
+        self._plan_for_type_btn.clicked.connect(self._on_plan_for_type)
+        data_section.add_widget(self._plan_for_type_btn)
 
         self._data_info_label = NeumorphicLabel("暂无数据", level="caption")
         data_section.add_widget(self._data_info_label)
@@ -274,3 +314,23 @@ class Sidebar(QWidget):
     def _on_stop_nav(self):
         self.set_nav_active(False)
         self.stop_nav_clicked.emit()
+
+    def set_type_filter_items(self, types: list):
+        """Set available resource types for filtering"""
+        current = self._type_filter.currentText()
+        self._type_filter.clear()
+        self._type_filter.addItem("全部类型")
+        for t in types:
+            self._type_filter.addItem(t)
+        idx = self._type_filter.findText(current)
+        if idx >= 0:
+            self._type_filter.setCurrentIndex(idx)
+
+    def _on_filter_changed(self, text: str):
+        filter_val = "" if text == "全部类型" else text
+        self.filter_type_changed.emit(filter_val)
+
+    def _on_plan_for_type(self):
+        current = self._type_filter.currentText()
+        filter_val = "" if current == "全部类型" else current
+        self.plan_route_for_type.emit(filter_val)
