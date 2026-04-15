@@ -48,14 +48,22 @@ class WikiUpdateWorker(QThread):
     progress = pyqtSignal(int, str)
     finished = pyqtSignal(bool, str)
 
-    def __init__(self, updater: WikiUpdater):
+    def __init__(self, updater: WikiUpdater, task: str = "points"):
+        """
+        Args:
+            updater: WikiUpdater instance
+            task: "points" for point data, "map" for map tiles
+        """
         super().__init__()
         self._updater = updater
+        self._task = task
 
     def run(self):
-        success, msg = self._updater.one_click_update(
-            progress_callback=lambda pct, text: self.progress.emit(pct, text)
-        )
+        cb = lambda pct, text: self.progress.emit(pct, text)
+        if self._task == "map":
+            success, msg = self._updater.download_map(zoom=6, progress_callback=cb)
+        else:
+            success, msg = self._updater.update_points(progress_callback=cb)
         self.finished.emit(success, msg)
 
 
@@ -245,7 +253,8 @@ class MainWindow(QMainWindow):
         self._sidebar.plan_route_clicked.connect(self._on_plan_route)
         self._sidebar.start_nav_clicked.connect(self._on_start_nav)
         self._sidebar.stop_nav_clicked.connect(self._on_stop_nav)
-        self._sidebar.update_data_clicked.connect(self._on_update_data)
+        self._sidebar.update_points_clicked.connect(self._on_update_points)
+        self._sidebar.update_map_clicked.connect(self._on_update_map)
         self._sidebar.toggle_overlay_clicked.connect(self._on_toggle_overlay)
         self._sidebar.settings_clicked.connect(self._on_settings)
 
@@ -468,33 +477,114 @@ class MainWindow(QMainWindow):
 
     # ==================== Data ====================
 
-    def _on_update_data(self):
-        """WIKI 数据更新"""
+    def _on_update_points(self):
+        """WIKI 点位数据更新"""
         if self._wiki_updater.is_updating:
             QMessageBox.information(self, "Info", "Update already in progress.")
             return
 
-        self._sidebar.set_data_info("Updating...")
-        self._wiki_worker = WikiUpdateWorker(self._wiki_updater)
+        self._sidebar.set_data_info("Updating points...")
+        self._wiki_worker = WikiUpdateWorker(self._wiki_updater, task="points")
         self._wiki_worker.progress.connect(
             lambda pct, msg: self._sidebar.set_data_info(f"{pct}% - {msg}")
         )
-        self._wiki_worker.finished.connect(self._on_wiki_update_done)
+        self._wiki_worker.finished.connect(self._on_points_update_done)
         self._wiki_worker.start()
 
-    def _on_wiki_update_done(self, success: bool, message: str):
+    def _on_points_update_done(self, success: bool, message: str):
         if success:
             self._sidebar.set_data_info(message)
-            logger.info("WIKI update: %s", message)
+            logger.info("Points update: %s", message)
+            # Reload resources from cache
+            self._load_points_from_cache()
         else:
             self._sidebar.set_data_info(f"Failed: {message}")
-            logger.error("WIKI update failed: %s", message)
+            logger.error("Points update failed: %s", message)
+
+    def _on_update_map(self):
+        """WIKI 地图下载"""
+        if self._wiki_updater.is_updating:
+            QMessageBox.information(self, "Info", "Update already in progress.")
+            return
+
+        self._sidebar.set_data_info("Downloading map...")
+        self._wiki_worker = WikiUpdateWorker(self._wiki_updater, task="map")
+        self._wiki_worker.progress.connect(
+            lambda pct, msg: self._sidebar.set_data_info(f"{pct}% - {msg}")
+        )
+        self._wiki_worker.finished.connect(self._on_map_update_done)
+        self._wiki_worker.start()
+
+    def _on_map_update_done(self, success: bool, message: str):
+        if success:
+            self._sidebar.set_data_info(message)
+            logger.info("Map update: %s", message)
+            # Auto-load the downloaded map
+            self._try_load_map()
+        else:
+            self._sidebar.set_data_info(f"Failed: {message}")
+            logger.error("Map update failed: %s", message)
+
+    def _try_load_map(self):
+        """尝试加载已下载的地图"""
+        # Try zoom levels from high to low
+        for z in [6, 7, 5, 8, 4]:
+            map_path = self._wiki_updater.get_map_path(z)
+            if map_path:
+                if self._map_manager.load_map(map_path, f"world_z{z}"):
+                    self._map_canvas.load_map_image(map_path)
+                    self._sidebar.set_data_info(
+                        f"Map loaded: {self._map_manager.map_width}x{self._map_manager.map_height}"
+                    )
+                    logger.info("Map auto-loaded: %s", map_path)
+                    return True
+        return False
+
+    def _load_points_from_cache(self):
+        """从缓存加载点位数据到 ResourceManager"""
+        cache = self._wiki_updater.get_cached_data()
+        if not cache:
+            return
+
+        from roco_navigator.data.resource_manager import Resource
+
+        points = cache.get("points", [])
+        mark_type_map = {}
+        for mt in cache.get("mark_types", []):
+            mark_type_map[mt.get("mark_type", 0)] = mt
+
+        self._resource_manager.clear()
+        for pt in points:
+            mt_id = pt.get("mark_type", 0)
+            mt_info = mark_type_map.get(mt_id, {})
+            self._resource_manager.add(Resource(
+                id=pt.get("id", ""),
+                name=pt.get("name", mt_info.get("mark_type_name", "")),
+                type=mt_info.get("type", ""),
+                x=pt.get("x", 0),
+                y=pt.get("y", 0),
+                mark_type=mt_id,
+                icon_url=mt_info.get("icon_url", ""),
+                description=pt.get("desc", ""),
+                source="wiki",
+            ))
+
+        count = self._resource_manager.count
+        self._map_canvas.set_resources(self._resource_manager.to_display_list())
+        self._sidebar.set_data_info(f"{count} points loaded from WIKI")
+        logger.info("Loaded %d points from cache", count)
 
     def _update_data_info(self):
         """更新数据状态显示"""
-        count = self._resource_manager.count
-        if count > 0:
-            self._sidebar.set_data_info(f"{count} resources loaded")
+        # Try auto-load map on startup
+        self._try_load_map()
+
+        # Try load points from cache
+        cache = self._wiki_updater.get_cached_data()
+        if cache and cache.get("points"):
+            self._load_points_from_cache()
+        elif self._resource_manager.count > 0:
+            self._sidebar.set_data_info(f"{self._resource_manager.count} resources loaded")
         else:
             last = self._wiki_updater.get_last_update_time()
             if last:

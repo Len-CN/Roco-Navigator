@@ -62,7 +62,8 @@ class Sidebar(QWidget):
     plan_route_clicked = pyqtSignal()
     start_nav_clicked = pyqtSignal()
     stop_nav_clicked = pyqtSignal()
-    update_data_clicked = pyqtSignal()
+    update_points_clicked = pyqtSignal()
+    update_map_clicked = pyqtSignal()
     toggle_overlay_clicked = pyqtSignal(bool)
     settings_clicked = pyqtSignal()
 
@@ -202,9 +203,13 @@ class Sidebar(QWidget):
         # ---- 数据管理 ----
         data_section = SidebarSection("Data")
 
-        self._update_btn = NeumorphicButton("Update from WIKI")
-        self._update_btn.clicked.connect(self.update_data_clicked.emit)
-        data_section.add_widget(self._update_btn)
+        self._update_points_btn = NeumorphicButton("Update Points", primary=True)
+        self._update_points_btn.clicked.connect(self.update_points_clicked.emit)
+        data_section.add_widget(self._update_points_btn)
+
+        self._update_map_btn = NeumorphicButton("Update Map")
+        self._update_map_btn.clicked.connect(self.update_map_clicked.emit)
+        data_section.add_widget(self._update_map_btn)
 
         self._data_info_label = NeumorphicLabel("No data loaded", level="caption")
         data_section.add_widget(self._data_info_label)
