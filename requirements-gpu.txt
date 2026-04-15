@@ -1,0 +1,36 @@
+# Roco Navigator - GPU 加速可选依赖
+# 这些依赖用于启用 GPU 加速功能
+# 需要先安装 CUDA Toolkit 和对应的显卡驱动
+
+# OpenCV CUDA 版本
+# 注意: 需要从源码编译或使用预编译的 CUDA 版本
+# opencv-contrib-python>=4.8.0
+
+# CUDA 相关
+# 这些通常随 CUDA Toolkit 一起安装,不需要通过 pip 安装
+# pycuda>=2022.1  # 可选,用于更底层的 CUDA 操作
+
+# 说明:
+# 1. 首先确保已安装 NVIDIA 显卡驱动
+# 2. 安装 CUDA Toolkit (https://developer.nvidia.com/cuda-downloads)
+# 3. 卸载普通版 OpenCV: pip uninstall opencv-python
+# 4. 安装 CUDA 版 OpenCV (需要从源码编译或使用第三方预编译版本)
+# 
+# 编译 OpenCV CUDA 版本的步骤:
+# git clone https://github.com/opencv/opencv.git
+# git clone https://github.com/opencv/opencv_contrib.git
+# cd opencv && mkdir build && cd build
+# cmake -D CMAKE_BUILD_TYPE=RELEASE \
+#       -D WITH_CUDA=ON \
+#       -D CUDA_ARCH_BIN=7.5 \
+#       -D OPENCV_EXTRA_MODULES_PATH=../../opencv_contrib/modules \
+#       -D BUILD_opencv_python3=ON \
+#       ..
+# make -j8
+# make install
+#
+# 或者使用预编译版本:
+# pip install opencv-contrib-python (某些版本包含 CUDA 支持)
+
+# 验证 GPU 支持:
+# python -c "import cv2; print(cv2.cuda.getCudaEnabledDeviceCount())"

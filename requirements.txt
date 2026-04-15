@@ -1,0 +1,28 @@
+# Roco Navigator - 基础依赖
+# 这些是运行程序必需的依赖
+
+# UI 框架
+PyQt5>=5.15.0
+PyQt5-Qt5>=5.15.2
+
+# 图像处理 (CPU 版本)
+opencv-python>=4.8.0
+Pillow>=10.0.0
+numpy>=1.24.0
+
+# 屏幕捕获
+mss>=9.0.0
+
+# 网络请求和 HTML 解析
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+lxml>=4.9.0
+
+# 数据处理
+dataclasses-json>=0.6.0
+
+# 日志和配置
+python-dotenv>=1.0.0
+
+# 工具库
+typing-extensions>=4.8.0

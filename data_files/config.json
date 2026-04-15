@@ -1,0 +1,56 @@
+{
+  "minimap": {
+    "region": {"x": 0, "y": 0, "width": 200, "height": 200},
+    "calibrated": false
+  },
+  "tracking": {
+    "update_interval": 100,
+    "position_threshold": 5,
+    "teleport_threshold": 100,
+    "max_history": 10
+  },
+  "ui": {
+    "overlay_enabled": true,
+    "overlay_opacity": 0.85,
+    "overlay_position": {"x": 50, "y": 50},
+    "overlay_size": {"width": 320, "height": 400},
+    "show_route_line": true,
+    "show_distance": true,
+    "show_compass": true,
+    "theme": "neumorphism"
+  },
+  "performance": {
+    "max_fps": 30,
+    "image_scale": 1.0,
+    "use_gpu": false,
+    "gpu_device_id": 0,
+    "gpu_auto_fallback": true
+  },
+  "data_update": {
+    "wiki_url": "https://wiki.biligame.com/rocom/%E5%A4%A7%E5%9C%B0%E5%9B%BE",
+    "auto_update": false,
+    "update_interval_days": 7,
+    "last_update": null
+  },
+  "minimap_detection": {
+    "use_sift": true,
+    "use_clahe": true,
+    "use_ring_mask": true,
+    "sift_ratio_threshold": 0.7,
+    "min_good_matches": 10,
+    "fallback_to_color": true,
+    "check_minimap_visible": true
+  },
+  "navigation": {
+    "arrival_distance": 20,
+    "route_strategy": "nearest",
+    "use_2opt": true,
+    "show_eta": true
+  },
+  "logging": {
+    "level": "INFO",
+    "log_to_file": true,
+    "log_dir": "logs",
+    "max_log_files": 10
+  }
+}

@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.pyd
+
+# Virtual environment
+venv/
+.venv/
+env/
+.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+logs/*.log
+
+# Build
+build/
+dist/
+*.egg-info/
+*.egg
+
+# Cache
+.cache/
+*.pyc
+
+# GPU specific
+*.cubin
+*.fatbin
+
+# Data files (keep structure, ignore user data)
+# data_files/config.json  # Uncomment if you don't want to track user config
+
+# Assets (large files)
+# assets/maps/*.png
+# assets/icons/wiki/*
