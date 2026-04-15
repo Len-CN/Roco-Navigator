@@ -21,7 +21,7 @@ from roco_navigator.ui.widgets.neumorphic import (
 class TitleBar(QWidget):
     """自定义标题栏"""
 
-    def __init__(self, parent=None, title="Roco Navigator"):
+    def __init__(self, parent=None, title="洛克导航"):
         super().__init__(parent)
         self._parent_window = parent
         self._dragging = False

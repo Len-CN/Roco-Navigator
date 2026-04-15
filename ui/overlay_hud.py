@@ -413,15 +413,15 @@ class OverlayHUD(QWidget):
         # 目标名称
         painter.setPen(QColor(TEXT_PRIMARY))
         painter.setFont(QFont("Microsoft YaHei", 12, QFont.Bold))
-        name = self._target_name if self._target_name else "No target"
+        name = self._target_name if self._target_name else "无目标"
         painter.drawText(x0, y0 + 22, name)
 
         # 距离 + ETA
         painter.setPen(QColor(TEXT_SECONDARY))
         painter.setFont(QFont("Arial", 10))
 
-        dist_text = f"Dist: {self._distance:.0f}"
-        eta_text = f"ETA: {self._eta_seconds:.0f}s" if self._eta_seconds < 9999 else "ETA: --"
+        dist_text = f"距离: {self._distance:.0f}"
+        eta_text = f"预计: {self._eta_seconds:.0f}秒" if self._eta_seconds < 9999 else "预计: --"
         progress_text = f"{self._current_index}/{self._total_targets}"
 
         painter.drawText(x0, y0 + 42, dist_text)
@@ -486,19 +486,19 @@ class OverlayHUD(QWidget):
             }}
         """)
 
-        lock_text = "Unlock" if self._locked else "Lock Position"
+        lock_text = "解锁位置" if self._locked else "锁定位置"
         lock_action = menu.addAction(lock_text)
         lock_action.triggered.connect(lambda: self.set_locked(not self._locked))
 
         menu.addSeparator()
 
         for name, (w, h) in self.SIZES.items():
-            a = menu.addAction(f"Size: {name} ({w}x{h})")
+            a = menu.addAction(f"大小: {name} ({w}x{h})")
             a.triggered.connect(lambda checked, s=name: self._resize_to(s))
 
         menu.addSeparator()
 
-        close_action = menu.addAction("Close HUD")
+        close_action = menu.addAction("关闭悬浮窗")
         close_action.triggered.connect(self._on_close)
 
         menu.exec_(pos)

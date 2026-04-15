@@ -132,7 +132,7 @@ class MinimapSelector(QWidget):
         info_y = self._sel_y - 30 if self._sel_y > 60 else self._sel_y + self._sel_size + 25
         painter.drawText(
             self._sel_x, info_y,
-            f"Position: ({self._sel_x}, {self._sel_y})  Size: {self._sel_size}x{self._sel_size}"
+            f"位置: ({self._sel_x}, {self._sel_y})  大小: {self._sel_size}x{self._sel_size}"
         )
 
         # 操作提示
@@ -143,7 +143,7 @@ class MinimapSelector(QWidget):
         hint_y = info_y + 20 if info_y > self._sel_y else info_y + 20
         painter.drawText(
             self._sel_x, hint_y,
-            "Drag to move | Scroll to resize | Enter to confirm | Esc to cancel"
+            "拖动移动 | 滚轮调整大小 | Enter 确认 | Esc 取消"
         )
 
     # ==================== Mouse interaction ====================

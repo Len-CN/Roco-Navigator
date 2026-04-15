@@ -87,7 +87,7 @@ class StatusBarWidget(QWidget):
         layout.setContentsMargins(16, 0, 16, 0)
         layout.setSpacing(16)
 
-        self._gpu_label = QLabel("CPU Mode")
+        self._gpu_label = QLabel("CPU 模式")
         self._gpu_label.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px; background: transparent;")
         layout.addWidget(self._gpu_label)
 
@@ -97,15 +97,15 @@ class StatusBarWidget(QWidget):
         self._fps_label.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px; background: transparent;")
         layout.addWidget(self._fps_label)
 
-        self._state_label = QLabel("Idle")
+        self._state_label = QLabel("空闲")
         self._state_label.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px; background: transparent;")
         layout.addWidget(self._state_label)
 
-        self._pos_label = QLabel("Position: --")
+        self._pos_label = QLabel("位置: --")
         self._pos_label.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px; background: transparent;")
         layout.addWidget(self._pos_label)
 
-        self._zoom_label = QLabel("Zoom: 100%")
+        self._zoom_label = QLabel("缩放: 100%")
         self._zoom_label.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px; background: transparent;")
         layout.addWidget(self._zoom_label)
 
@@ -119,13 +119,13 @@ class StatusBarWidget(QWidget):
         self._state_label.setText(text)
 
     def set_position(self, x: float, y: float):
-        self._pos_label.setText(f"Pos: ({x:.0f}, {y:.0f})")
+        self._pos_label.setText(f"位置: ({x:.0f}, {y:.0f})")
 
     def set_zoom(self, zoom: float):
-        self._zoom_label.setText(f"Zoom: {zoom * 100:.0f}%")
+        self._zoom_label.setText(f"缩放: {zoom * 100:.0f}%")
 
     def clear_position(self):
-        self._pos_label.setText("Position: --")
+        self._pos_label.setText("位置: --")
 
 
 # ==================== 主窗口 ====================
@@ -145,7 +145,7 @@ class MainWindow(QMainWindow):
         self.setAttribute(Qt.WA_TranslucentBackground, False)
         self.setMinimumSize(self.MIN_WIDTH, self.MIN_HEIGHT)
         self.resize(1200, 800)
-        self.setWindowTitle("Roco Navigator")
+        self.setWindowTitle("洛克导航")
         self.setStyleSheet(f"QMainWindow {{ background-color: {BG_PRIMARY}; }}")
 
         # ---- 初始化核心模块 ----
@@ -222,7 +222,7 @@ class MainWindow(QMainWindow):
         main_layout.setSpacing(0)
 
         # 标题栏
-        self._title_bar = TitleBar(self, title="Roco Navigator")
+        self._title_bar = TitleBar(self, title="洛克导航")
         main_layout.addWidget(self._title_bar)
 
         # 内容区域
@@ -286,16 +286,16 @@ class MainWindow(QMainWindow):
         """开始追踪"""
         region = self._settings.get("minimap.region")
         if not region or not self._settings.get("minimap.calibrated", False):
-            QMessageBox.warning(self, "Warning",
-                                "Please calibrate the minimap first.\n"
-                                "Click 'Calibrate Minimap' to select the minimap area.")
+            QMessageBox.warning(self, "警告",
+                                "请先校准小地图。\n"
+                                "点击\"校准小地图\"选择小地图区域。")
             self._sidebar.set_tracking_active(False)
             return
 
         if not self._map_manager.is_loaded:
-            QMessageBox.warning(self, "Warning",
-                                "No map loaded. Please load a map image first.\n"
-                                "Place map files in assets/maps/ directory.")
+            QMessageBox.warning(self, "警告",
+                                "未加载地图。请先下载地图。\n"
+                                "点击\"更新地图\"从 WIKI 下载。")
             self._sidebar.set_tracking_active(False)
             return
 
@@ -306,7 +306,7 @@ class MainWindow(QMainWindow):
         self._tracking_timer.start(interval)
 
         self._title_bar.set_status("tracking")
-        self._title_bar.set_status_text("Tracking")
+        self._title_bar.set_status_text("追踪中")
         logger.info("Tracking started")
 
     def _on_stop_tracking(self):
@@ -350,11 +350,11 @@ class MainWindow(QMainWindow):
     def _on_tracking_state_changed(self, state: TrackingState):
         """追踪状态变化"""
         state_map = {
-            TrackingState.IDLE: ("idle", "Idle"),
-            TrackingState.GLOBAL_SCAN: ("tracking", "Scanning..."),
-            TrackingState.PRECISE_TRACK: ("active", "Tracking"),
-            TrackingState.INERTIA_NAV: ("warning", "Inertia"),
-            TrackingState.LOST: ("error", "Lost"),
+            TrackingState.IDLE: ("idle", "空闲"),
+            TrackingState.GLOBAL_SCAN: ("tracking", "扫描中..."),
+            TrackingState.PRECISE_TRACK: ("active", "追踪中"),
+            TrackingState.INERTIA_NAV: ("warning", "惯性导航"),
+            TrackingState.LOST: ("error", "丢失"),
         }
         status, text = state_map.get(state, ("idle", ""))
         self._title_bar.set_status(status)
@@ -367,9 +367,9 @@ class MainWindow(QMainWindow):
         """规划路线"""
         resources = self._resource_manager.to_display_list()
         if not resources:
-            QMessageBox.information(self, "Info",
-                                    "No resources loaded.\n"
-                                    "Update from WIKI or add resources manually.")
+            QMessageBox.information(self, "提示",
+                                    "暂无资源数据。\n"
+                                    "请从 WIKI 更新或手动添加资源。")
             return
 
         targets = [(r["x"], r["y"]) for r in resources]
@@ -383,7 +383,7 @@ class MainWindow(QMainWindow):
         # 保存路线
         route_obj = Route(
             id=f"auto_{len(self._route_manager.get_all()) + 1}",
-            name=f"Auto Route ({len(route) - 1} pts)",
+            name=f"自动路线 ({len(route) - 1} 个点)",
             targets=route[1:],
             total_distance=dist,
             strategy=strategy,
@@ -393,13 +393,13 @@ class MainWindow(QMainWindow):
         # 显示在地图上
         self._map_canvas.set_route([(p[0], p[1]) for p in route])
 
-        self._sidebar.set_nav_progress(0, f"Route: {len(route)-1} targets, {dist:.0f}px")
+        self._sidebar.set_nav_progress(0, f"路线: {len(route)-1} 个目标, {dist:.0f}px")
         logger.info("Route planned: %d targets, %.0f total distance", len(route) - 1, dist)
 
     def _on_start_nav(self):
         """开始导航"""
         if not self._map_canvas._route_points:
-            QMessageBox.information(self, "Info", "No route planned. Plan a route first.")
+            QMessageBox.information(self, "提示", "暂无规划路线。请先规划路线。")
             self._sidebar.set_nav_active(False)
             return
 
@@ -407,15 +407,15 @@ class MainWindow(QMainWindow):
         self._navigator.start(route)
 
         self._title_bar.set_status("active")
-        self._title_bar.set_status_text("Navigating")
+        self._title_bar.set_status_text("导航中")
         logger.info("Navigation started")
 
     def _on_stop_nav(self):
         """停止导航"""
         self._navigator.stop()
         self._title_bar.set_status("tracking" if self._tracker.is_running else "idle")
-        self._title_bar.set_status_text("Tracking" if self._tracker.is_running else "")
-        self._sidebar.set_nav_progress(0, "Navigation stopped")
+        self._title_bar.set_status_text("追踪中" if self._tracker.is_running else "")
+        self._sidebar.set_nav_progress(0, "导航已停止")
         logger.info("Navigation stopped")
 
     def _on_target_reached(self, index: int, target):
@@ -428,9 +428,9 @@ class MainWindow(QMainWindow):
     def _on_navigation_complete(self):
         logger.info("Navigation complete!")
         self._sidebar.set_nav_active(False)
-        self._sidebar.set_nav_progress(100, "Navigation complete!")
+        self._sidebar.set_nav_progress(100, "导航完成！")
         self._title_bar.set_status("active")
-        self._title_bar.set_status_text("Complete")
+        self._title_bar.set_status_text("已完成")
 
     def _update_hud_from_nav(self, tracking_status, nav_info):
         """更新 HUD 显示"""
@@ -480,10 +480,10 @@ class MainWindow(QMainWindow):
     def _on_update_points(self):
         """WIKI 点位数据更新"""
         if self._wiki_updater.is_updating:
-            QMessageBox.information(self, "Info", "Update already in progress.")
+            QMessageBox.information(self, "提示", "更新正在进行中。")
             return
 
-        self._sidebar.set_data_info("Updating points...")
+        self._sidebar.set_data_info("正在更新点位...")
         self._wiki_worker = WikiUpdateWorker(self._wiki_updater, task="points")
         self._wiki_worker.progress.connect(
             lambda pct, msg: self._sidebar.set_data_info(f"{pct}% - {msg}")
@@ -504,10 +504,10 @@ class MainWindow(QMainWindow):
     def _on_update_map(self):
         """WIKI 地图下载"""
         if self._wiki_updater.is_updating:
-            QMessageBox.information(self, "Info", "Update already in progress.")
+            QMessageBox.information(self, "提示", "更新正在进行中。")
             return
 
-        self._sidebar.set_data_info("Downloading map...")
+        self._sidebar.set_data_info("正在下载地图...")
         self._wiki_worker = WikiUpdateWorker(self._wiki_updater, task="map")
         self._wiki_worker.progress.connect(
             lambda pct, msg: self._sidebar.set_data_info(f"{pct}% - {msg}")
@@ -534,7 +534,7 @@ class MainWindow(QMainWindow):
                 if self._map_manager.load_map(map_path, f"world_z{z}"):
                     self._map_canvas.load_map_image(map_path)
                     self._sidebar.set_data_info(
-                        f"Map loaded: {self._map_manager.map_width}x{self._map_manager.map_height}"
+                        f"地图已加载: {self._map_manager.map_width}x{self._map_manager.map_height}"
                     )
                     logger.info("Map auto-loaded: %s", map_path)
                     return True
@@ -571,7 +571,7 @@ class MainWindow(QMainWindow):
 
         count = self._resource_manager.count
         self._map_canvas.set_resources(self._resource_manager.to_display_list())
-        self._sidebar.set_data_info(f"{count} points loaded from WIKI")
+        self._sidebar.set_data_info(f"已从 WIKI 加载 {count} 个点位")
         logger.info("Loaded %d points from cache", count)
 
     def _update_data_info(self):
@@ -584,13 +584,13 @@ class MainWindow(QMainWindow):
         if cache and cache.get("points"):
             self._load_points_from_cache()
         elif self._resource_manager.count > 0:
-            self._sidebar.set_data_info(f"{self._resource_manager.count} resources loaded")
+            self._sidebar.set_data_info(f"已加载 {self._resource_manager.count} 个资源")
         else:
             last = self._wiki_updater.get_last_update_time()
             if last:
-                self._sidebar.set_data_info(f"Last update: {last[:10]}")
+                self._sidebar.set_data_info(f"上次更新: {last[:10]}")
             else:
-                self._sidebar.set_data_info("No data - click Update")
+                self._sidebar.set_data_info("暂无数据 - 点击更新")
 
     # ==================== Overlay ====================
 
@@ -619,11 +619,11 @@ class MainWindow(QMainWindow):
         gpu = GPUManager()
         if gpu.check_gpu_available():
             if self._settings.get("performance.use_gpu", False):
-                self._status_bar.set_gpu_status("GPU Mode (CUDA)")
+                self._status_bar.set_gpu_status("GPU 模式 (CUDA)")
             else:
-                self._status_bar.set_gpu_status("GPU Available (Disabled)")
+                self._status_bar.set_gpu_status("GPU 可用 (已禁用)")
         else:
-            self._status_bar.set_gpu_status("CPU Mode")
+            self._status_bar.set_gpu_status("CPU 模式")
 
     def _center_on_screen(self):
         screen = QApplication.primaryScreen()

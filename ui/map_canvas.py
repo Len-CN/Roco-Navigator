@@ -77,7 +77,7 @@ class MapCanvas(QWidget):
         self._resource_points: List[dict] = []
 
         # 提示文字 (地图未加载时)
-        self._placeholder_text = "Map not loaded\nLoad a map to get started"
+        self._placeholder_text = "地图未加载\n请加载地图以开始使用"
 
         # 启用鼠标追踪
         self.setMouseTracking(True)
