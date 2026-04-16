@@ -7,13 +7,15 @@
 """
 
 import logging
+import sys
+from typing import Optional
 from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QLabel, QMessageBox, QGraphicsDropShadowEffect,
+    QLabel, QMessageBox,
     QApplication, QSizePolicy, QFrame
 )
-from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal, QRectF
-from PyQt5.QtGui import QColor, QResizeEvent, QPainter, QPainterPath, QBrush
+from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal, QRectF, QProcess
+from PyQt5.QtGui import QColor, QResizeEvent, QPainter, QPainterPath
 
 from roco_navigator.config.settings import Settings
 from roco_navigator.ui.widgets.title_bar import TitleBar
@@ -195,7 +197,12 @@ class MainWindow(QMainWindow):
         self._route_manager = RouteManager()
         self._wiki_updater = WikiUpdater()
 
-        use_gpu = settings.get("performance.use_gpu", False)
+        # Auto-detect GPU (CUDA OpenCV)
+        try:
+            import cv2 as _cv2
+            use_gpu = hasattr(_cv2, 'cuda') and _cv2.cuda.getCudaEnabledDeviceCount() > 0
+        except Exception:
+            use_gpu = False
         self._minimap_detector = MinimapDetector(
             use_clahe=settings.get("minimap_detection.use_clahe", True),
             use_ring_mask=settings.get("minimap_detection.use_ring_mask", True),
@@ -227,12 +234,22 @@ class MainWindow(QMainWindow):
         self._setup_ui()
 
         # ---- 悬浮窗 HUD ----
-        self._overlay_hud = OverlayHUD(size="medium")
+        hud_size = settings.get("ui.overlay_size", {"width": 320, "height": 400})
+        hud_shape = settings.get("ui.hud_shape", "rounded_rect")
+        self._overlay_hud = OverlayHUD(
+            size="medium",
+            custom_w=hud_size.get("width", 0),
+            custom_h=hud_size.get("height", 0),
+            shape=hud_shape,
+        )
         if settings.get("ui.overlay_enabled", True):
             self._overlay_hud.show()
         self._overlay_hud.closed.connect(
             lambda: self._sidebar._overlay_check.setChecked(False)
         )
+        self._overlay_hud.crop_size_changed.connect(self._on_hud_crop_size_changed)
+        self._overlay_hud.size_changed.connect(self._on_hud_size_changed)
+        self._overlay_hud.shape_changed.connect(self._on_hud_shape_changed)
 
         # ---- 定时器 ----
         self._tracking_timer = QTimer(self)
@@ -248,6 +265,17 @@ class MainWindow(QMainWindow):
         self._update_gpu_status()
         self._update_data_info()
         self._center_on_screen()
+
+        # ---- 依赖安装进程 (managed at MainWindow level for persistence) ----
+        self._dep_install_process: Optional[QProcess] = None
+        self._dep_install_log: str = ""
+        self._dep_install_running: bool = False
+        self._dep_needs_restart: bool = False
+        self._dep_opencv_switched: str = ""  # "cpu" or "cuda" after opencv switch
+
+        # Enable AI mode if configured
+        detection_mode = settings.get("tracking.detection_mode", "sift")
+        self._minimap_detector.set_detection_mode(detection_mode)
 
         logger.info("Main window initialized with all modules integrated")
 
@@ -278,6 +306,7 @@ class MainWindow(QMainWindow):
         self._map_canvas = MapCanvas()
         self._map_canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self._map_canvas.position_clicked.connect(self._on_map_clicked)
+        self._map_canvas.region_selected.connect(self._on_region_selected)
         content_layout.addWidget(self._map_canvas, stretch=1)
 
         main_layout.addWidget(content, stretch=1)
@@ -294,9 +323,11 @@ class MainWindow(QMainWindow):
         self._sidebar.update_points_clicked.connect(self._on_update_points)
         self._sidebar.update_map_clicked.connect(self._on_update_map)
         self._sidebar.toggle_overlay_clicked.connect(self._on_toggle_overlay)
+        self._sidebar.overlay_passthrough_clicked.connect(self._on_toggle_overlay_passthrough)
         self._sidebar.settings_clicked.connect(self._on_settings)
         self._sidebar.filter_type_changed.connect(self._on_filter_type_changed)
         self._sidebar.plan_route_for_type.connect(self._on_plan_route_for_type)
+        self._sidebar.select_region_for_route.connect(self._on_select_region_for_route)
 
     # ==================== Tracking ====================
 
@@ -403,16 +434,19 @@ class MainWindow(QMainWindow):
 
     # ==================== Navigation ====================
 
-    def _on_filter_type_changed(self, type_filter: str):
-        """点位类型筛选"""
-        display = self._resource_manager.to_display_list(type_filter=type_filter if type_filter else None)
+    def _on_filter_type_changed(self, selected_names):
+        """点位类型筛选 - selected_names is a set of mark_type_name strings, or empty for all"""
+        display = self._resource_manager.to_display_list(
+            mark_type_names=selected_names if selected_names else None
+        )
         self._map_canvas.set_resources(display)
-        logger.info("Filter changed: %s (%d points)", type_filter or "all", len(display))
+        logger.info("Filter changed: %d selected (%d points)",
+                     len(selected_names) if selected_names else 0, len(display))
 
-    def _on_plan_route_for_type(self, type_filter: str):
-        """为指定类型的资源规划路线"""
-        if type_filter:
-            resources = self._resource_manager.to_display_list(type_filter=type_filter)
+    def _on_plan_route_for_type(self, selected_names):
+        """为选中类型的资源规划路线 - selected_names is a set of mark_type_name strings"""
+        if selected_names:
+            resources = self._resource_manager.to_display_list(mark_type_names=selected_names)
         else:
             resources = self._resource_manager.to_display_list()
 
@@ -442,7 +476,8 @@ class MainWindow(QMainWindow):
             self._sidebar.set_nav_progress(0, "规划失败")
             return
 
-        type_name = self._sidebar._type_filter.currentText()
+        selected = self._sidebar._get_selected_mark_type_names()
+        type_name = ", ".join(sorted(selected)) if selected else "全部"
         route_obj = Route(
             id=f"auto_{len(self._route_manager.get_all()) + 1}",
             name=f"{type_name} ({len(route) - 1} 个点)",
@@ -452,6 +487,7 @@ class MainWindow(QMainWindow):
         )
         self._route_manager.add(route_obj)
         self._map_canvas.set_route([(p[0], p[1]) for p in route])
+        self._map_canvas.clear_selected_region()
         self._sidebar.set_nav_progress(0, f"路线: {len(route)-1} 个目标, {dist:.0f}px")
         logger.info("Route planned: %d targets, %.0f distance", len(route) - 1, dist)
 
@@ -481,7 +517,8 @@ class MainWindow(QMainWindow):
         logger.info("Target %d reached: (%.0f, %.0f)", index, target[0], target[1])
         self._map_canvas.set_route(
             [(p.x(), p.y()) for p in self._map_canvas._route_points],
-            current_index=index + 1
+            current_index=index + 1,
+            visited=self._navigator.visited_indices
         )
 
     def _on_navigation_complete(self):
@@ -500,14 +537,15 @@ class MainWindow(QMainWindow):
         if pos is None:
             return
 
-        # 获取地图裁剪
-        crop, rel = self._map_manager.get_map_crop_centered(pos[0], pos[1], 600)
+        # 获取地图裁剪 (configurable crop size for zoom)
+        hud_crop_size = self._settings.get("ui.hud_crop_size", 350)
+        crop, rel = self._map_manager.get_map_crop_centered(pos[0], pos[1], hud_crop_size)
         if crop is None:
             return
 
         # 转换路线点为裁剪图相对坐标
         route_rel = []
-        half = 300  # crop_size / 2
+        half = hud_crop_size / 2
         for pt in self._navigator.route:
             rx = pt[0] - pos[0] + half
             ry = pt[1] - pos[1] + half
@@ -519,6 +557,22 @@ class MainWindow(QMainWindow):
                 nav_info.current_target[0] - pos[0] + half,
                 nav_info.current_target[1] - pos[1] + half,
             )
+
+        # Gather resource points within the crop area
+        resource_rel = []
+        crop_x1 = pos[0] - half
+        crop_y1 = pos[1] - half
+        display_list = self._resource_manager.to_display_list()
+        for res in display_list:
+            rx = res["x"] - crop_x1
+            ry = res["y"] - crop_y1
+            # Only include points within crop bounds (with small margin)
+            if -10 <= rx <= hud_crop_size + 10 and -10 <= ry <= hud_crop_size + 10:
+                resource_rel.append({
+                    "rx": rx, "ry": ry,
+                    "type": res.get("type", ""),
+                    "name": res.get("name", ""),
+                })
 
         self._overlay_hud.update_navigation(
             map_crop=crop,
@@ -533,6 +587,9 @@ class MainWindow(QMainWindow):
             current_idx=nav_info.current_target_index,
             total=nav_info.total_targets,
             direction_to_target=nav_info.direction_to_target,
+            resource_rel_points=resource_rel,
+            visited_indices=self._navigator.visited_indices,
+            current_route_index=nav_info.current_target_index,
         )
 
     # ==================== Data ====================
@@ -558,7 +615,7 @@ class MainWindow(QMainWindow):
             # Reload resources from cache
             self._load_points_from_cache()
         else:
-            self._sidebar.set_data_info(f"Failed: {message}")
+            self._sidebar.set_data_info(f"失败: {message}")
             logger.error("Points update failed: %s", message)
 
     def _on_update_map(self):
@@ -582,7 +639,7 @@ class MainWindow(QMainWindow):
             # Auto-load the downloaded map
             self._try_load_map()
         else:
-            self._sidebar.set_data_info(f"Failed: {message}")
+            self._sidebar.set_data_info(f"失败: {message}")
             logger.error("Map update failed: %s", message)
 
     def _try_load_map(self):
@@ -597,6 +654,18 @@ class MainWindow(QMainWindow):
                         f"地图已加载: {self._map_manager.map_width}x{self._map_manager.map_height}"
                     )
                     logger.info("Map auto-loaded: %s", map_path)
+
+                    # Pre-compute SIFT features for fast tracking
+                    import cv2
+                    map_bgr = cv2.imread(str(map_path))
+                    if map_bgr is not None:
+                        map_gray = cv2.cvtColor(map_bgr, cv2.COLOR_BGR2GRAY)
+                        count = self._tracker.precompute_map_features(map_gray)
+                        if count > 0:
+                            logger.info("Pre-computed %d SIFT features for tracking", count)
+                        else:
+                            logger.warning("SIFT feature precomputation returned 0 features")
+
                     return True
         return False
 
@@ -614,9 +683,14 @@ class MainWindow(QMainWindow):
             mark_type_map[mt.get("mark_type", 0)] = mt
 
         self._resource_manager.clear()
+        skipped = 0
         for pt in points:
             mt_id = pt.get("mark_type", 0)
             mt_info = mark_type_map.get(mt_id, {})
+            # Skip orphaned points with no category info
+            if not mt_info:
+                skipped += 1
+                continue
             # Convert Leaflet coords (lng, lat) to pixel coords
             lng = pt.get("x", 0)
             lat = pt.get("y", 0)
@@ -628,10 +702,13 @@ class MainWindow(QMainWindow):
                 x=px,
                 y=py,
                 mark_type=mt_id,
+                mark_type_name=mt_info.get("mark_type_name", ""),
                 icon_url=mt_info.get("icon_url", ""),
                 description=pt.get("desc", ""),
                 source="wiki",
             ))
+        if skipped:
+            logger.info("Skipped %d points with unknown mark_type", skipped)
 
         count = self._resource_manager.count
         self._map_canvas.set_resources(self._resource_manager.to_display_list())
@@ -644,9 +721,19 @@ class MainWindow(QMainWindow):
         self._sidebar.set_data_info(f"已从 WIKI 加载 {count} 个点位")
         logger.info("Loaded %d points from cache", count)
 
-        # Populate type filter
-        types = self._resource_manager.get_types()
-        self._sidebar.set_type_filter_items(types)
+        # Populate type filter with grouped categories (preserve bwiki order)
+        grouped = {}
+        for mt in cache.get("mark_types", []):
+            t = mt.get("type", "")
+            n = mt.get("mark_type_name", "")
+            if not t or not n:
+                continue
+            if t not in grouped:
+                grouped[t] = []
+            if n not in grouped[t]:
+                grouped[t].append(n)
+        point_counts = self._resource_manager.get_point_counts_by_mark_type_name()
+        self._sidebar.set_type_filter_items_grouped(grouped, point_counts)
 
     def _update_data_info(self):
         """更新数据状态显示"""
@@ -675,11 +762,58 @@ class MainWindow(QMainWindow):
             self._overlay_hud.hide()
         self._settings.set("ui.overlay_enabled", enabled)
 
+    def _on_toggle_overlay_passthrough(self, enabled: bool):
+        self._overlay_hud.set_passthrough_locked(enabled)
+
+    def _on_hud_crop_size_changed(self, size: int):
+        self._settings.set("ui.hud_crop_size", size)
+
+    def _on_hud_size_changed(self, w: int, h: int):
+        self._settings.set("ui.overlay_size", {"width": w, "height": h})
+
+    def _on_hud_shape_changed(self, shape: str):
+        self._settings.set("ui.hud_shape", shape)
+
     # ==================== Map click ====================
 
     def _on_map_clicked(self, x: float, y: float):
         """地图右键点击"""
         logger.debug("Map clicked: (%.0f, %.0f)", x, y)
+
+    def _on_select_region_for_route(self):
+        """Enter region selection mode on map canvas."""
+        self._map_canvas.start_region_selection()
+        self._sidebar.set_data_info("请在地图上框选区域...")
+
+    def _on_region_selected(self, x1, y1, x2, y2):
+        """Region selected on map — plan route for points within."""
+        selected_names = self._sidebar._get_selected_mark_type_names()
+        if selected_names:
+            all_resources = self._resource_manager.to_display_list(mark_type_names=selected_names)
+        else:
+            all_resources = self._resource_manager.to_display_list()
+
+        # Filter to points within the region
+        region_resources = [
+            r for r in all_resources
+            if x1 <= r["x"] <= x2 and y1 <= r["y"] <= y2
+        ]
+
+        if not region_resources:
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.information(self, "提示", "选中区域内没有资源点。")
+            self._map_canvas.clear_selected_region()
+            return
+
+        self._sidebar.set_data_info(f"区域内 {len(region_resources)} 个点位，正在规划...")
+        self._sidebar.set_nav_progress(0, "正在规划路线...")
+
+        self._route_worker = RouteWorker(
+            self._path_planner, self._tracker.position, region_resources,
+            self._settings.get("navigation.route_strategy", "auto")
+        )
+        self._route_worker.finished.connect(self._on_route_planned)
+        self._route_worker.start()
 
     # ==================== Settings ====================
 
@@ -689,6 +823,107 @@ class MainWindow(QMainWindow):
         dialog = SettingsDialog(self._settings, self)
         dialog.settings_changed.connect(self._apply_settings)
         dialog.exec_()
+
+    # ---- Dependency install (persistent across dialog open/close) ----
+
+    def start_dep_install(self, packages: list, extra_args: list = None,
+                          needs_restart: bool = False):
+        """Start pip install process (called by SettingsDialog)."""
+        if self._dep_install_running:
+            return
+        self._dep_install_running = True
+        self._dep_needs_restart = needs_restart
+        self._dep_install_log = ""
+
+        python_exe = sys.executable
+        self._dep_install_process = QProcess(self)
+        self._dep_install_process.setProcessChannelMode(QProcess.MergedChannels)
+        self._dep_install_process.readyReadStandardOutput.connect(
+            self._on_dep_install_output
+        )
+        self._dep_install_process.finished.connect(self._on_dep_install_finished)
+
+        args = ["-m", "pip", "install"] + packages
+        if extra_args:
+            args.extend(extra_args)
+
+        cmd_text = f"$ {python_exe} -m pip install {' '.join(packages)}\n"
+        self._dep_install_log += cmd_text
+        self._dep_install_process.start(python_exe, args)
+        logger.info("Dep install started: %s", packages)
+
+    def start_dep_uninstall_then_install(self, uninstall_pkgs: list,
+                                          install_pkgs: list,
+                                          extra_args: list = None):
+        """Uninstall packages first, then install new ones."""
+        if self._dep_install_running:
+            return
+        self._dep_install_running = True
+        self._dep_needs_restart = True
+        self._dep_install_log = ""
+        self._pending_install_pkgs = install_pkgs
+        self._pending_install_args = extra_args or []
+
+        # Track OpenCV switch for UI display
+        if any("opencv-python-cuda-wheels" in pkg or "opencv_contrib_python" in pkg for pkg in install_pkgs):
+            self._dep_opencv_switched = "cuda"
+        elif "opencv-python" in install_pkgs:
+            self._dep_opencv_switched = "cpu"
+
+        python_exe = sys.executable
+        self._dep_install_process = QProcess(self)
+        self._dep_install_process.setProcessChannelMode(QProcess.MergedChannels)
+        self._dep_install_process.readyReadStandardOutput.connect(
+            self._on_dep_install_output
+        )
+        self._dep_install_process.finished.connect(
+            self._on_dep_uninstall_finished
+        )
+
+        args = ["-m", "pip", "uninstall"] + uninstall_pkgs + ["-y"]
+        cmd_text = f"$ pip uninstall {' '.join(uninstall_pkgs)} -y\n"
+        self._dep_install_log += cmd_text
+        self._dep_install_process.start(python_exe, args)
+
+    def _on_dep_install_output(self):
+        data = self._dep_install_process.readAllStandardOutput()
+        text = bytes(data).decode("utf-8", errors="replace")
+        self._dep_install_log += text
+
+    def _on_dep_install_finished(self, exit_code, _exit_status):
+        self._dep_install_running = False
+        if exit_code == 0:
+            if self._dep_needs_restart:
+                self._dep_install_log += "\n✓ 安装完成，请重启程序。\n"
+            else:
+                self._dep_install_log += "\n✓ 安装完成。\n"
+        else:
+            self._dep_install_log += f"\n✗ 安装失败 (exit code {exit_code})。\n"
+        logger.info("Dep install finished: exit_code=%d", exit_code)
+
+    def _on_dep_uninstall_finished(self, exit_code, _exit_status):
+        self._dep_install_log += f"\n卸载完成 (exit code {exit_code})。\n"
+        # Now install
+        pkgs = getattr(self, '_pending_install_pkgs', [])
+        extra = getattr(self, '_pending_install_args', [])
+        if pkgs:
+            python_exe = sys.executable
+            self._dep_install_process = QProcess(self)
+            self._dep_install_process.setProcessChannelMode(QProcess.MergedChannels)
+            self._dep_install_process.readyReadStandardOutput.connect(
+                self._on_dep_install_output
+            )
+            self._dep_install_process.finished.connect(
+                self._on_dep_install_finished
+            )
+            args = ["-m", "pip", "install"] + pkgs
+            if extra:
+                args.extend(extra)
+            cmd_text = f"$ pip install {' '.join(pkgs)}\n"
+            self._dep_install_log += cmd_text
+            self._dep_install_process.start(python_exe, args)
+        else:
+            self._dep_install_running = False
 
     def _apply_settings(self):
         """应用设置变更到运行中的模块"""
@@ -706,19 +941,23 @@ class MainWindow(QMainWindow):
         
         # GPU status display
         self._update_gpu_status()
-        
+
+        # Detection mode
+        detection_mode = self._settings.get("tracking.detection_mode", "sift")
+        self._minimap_detector.set_detection_mode(detection_mode)
+
         logger.info("Settings applied")
 
     # ==================== Misc ====================
 
     def _update_gpu_status(self):
-        gpu = GPUManager()
-        if gpu.check_gpu_available():
-            if self._settings.get("performance.use_gpu", False):
+        try:
+            import cv2
+            if hasattr(cv2, 'cuda') and cv2.cuda.getCudaEnabledDeviceCount() > 0:
                 self._status_bar.set_gpu_status("GPU 模式 (CUDA)")
             else:
-                self._status_bar.set_gpu_status("GPU 可用 (已禁用)")
-        else:
+                self._status_bar.set_gpu_status("CPU 模式")
+        except Exception:
             self._status_bar.set_gpu_status("CPU 模式")
 
     def _center_on_screen(self):

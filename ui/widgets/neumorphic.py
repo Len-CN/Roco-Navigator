@@ -8,7 +8,7 @@
 from PyQt5.QtWidgets import (
     QPushButton, QLineEdit, QFrame, QLabel, QSlider,
     QProgressBar, QCheckBox, QGraphicsDropShadowEffect,
-    QWidget, QVBoxLayout, QHBoxLayout
+    QWidget, QVBoxLayout, QHBoxLayout, QComboBox
 )
 from PyQt5.QtCore import Qt, QPropertyAnimation, QEasingCurve, pyqtSignal, QSize
 from PyQt5.QtGui import QColor, QFont, QPainter, QPainterPath, QLinearGradient
@@ -224,6 +224,101 @@ class NeumorphicProgress(QProgressBar):
                 border-radius: 6px;
             }}
         """)
+
+
+class NeumorphicComboBox(QComboBox):
+    """新拟物派下拉框"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setMinimumHeight(38)
+        self._popup_styled = False
+        self.setStyleSheet(f"""
+            QComboBox {{
+                background-color: {BG_PRIMARY};
+                color: {TEXT_PRIMARY};
+                border: 1px solid #d1d5db;
+                border-radius: 10px;
+                padding: 6px 32px 6px 14px;
+                font-size: 13px;
+                font-family: "Microsoft YaHei", sans-serif;
+            }}
+            QComboBox:hover {{
+                background-color: {BG_CARD};
+                border-color: #c0c4ca;
+            }}
+            QComboBox:focus {{
+                border-color: {ACCENT};
+            }}
+            QComboBox::drop-down {{
+                subcontrol-origin: padding;
+                subcontrol-position: center right;
+                width: 28px;
+                border: none;
+                background: transparent;
+            }}
+            QComboBox::down-arrow {{
+                width: 0;
+                height: 0;
+                border: none;
+            }}
+            QComboBox QAbstractItemView {{
+                background-color: {BG_SECONDARY};
+                color: {TEXT_PRIMARY};
+                border: 1px solid {SHADOW_DARK};
+                border-radius: 8px;
+                padding: 4px;
+                selection-background-color: {ACCENT};
+                selection-color: #ffffff;
+                outline: none;
+                font-size: 13px;
+            }}
+            QComboBox QAbstractItemView::item {{
+                padding: 6px 12px;
+                border-radius: 4px;
+                min-height: 28px;
+            }}
+            QComboBox QAbstractItemView::item:hover {{
+                background-color: {BG_CARD};
+            }}
+            QComboBox:disabled {{
+                color: {TEXT_DISABLED};
+                border-color: #e2e6ea;
+            }}
+        """)
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        arrow_x = self.width() - 20
+        arrow_y = self.height() // 2 - 2
+        color = QColor(ACCENT) if self.hasFocus() else QColor(TEXT_SECONDARY)
+        painter.setBrush(color)
+        painter.setPen(Qt.NoPen)
+        triangle = QPainterPath()
+        triangle.moveTo(arrow_x - 4, arrow_y)
+        triangle.lineTo(arrow_x + 4, arrow_y)
+        triangle.lineTo(arrow_x, arrow_y + 5)
+        triangle.closeSubpath()
+        painter.drawPath(triangle)
+
+    def showPopup(self):
+        super().showPopup()
+        # Style the popup for rounded corners (only need to do once)
+        if not self._popup_styled:
+            view = self.view()
+            if view:
+                win = view.window()
+                if win and win is not self:
+                    win.setWindowFlags(
+                        win.windowFlags() | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint
+                    )
+                    win.setAttribute(Qt.WA_TranslucentBackground, True)
+                    self._popup_styled = True
+                    # Re-show after flag changes (flags change destroys window)
+                    super().showPopup()
 
 
 class NeumorphicSeparator(QFrame):

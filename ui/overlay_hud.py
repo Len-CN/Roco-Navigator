@@ -23,21 +23,16 @@ from PyQt5.QtCore import (
 )
 from PyQt5.QtGui import (
     QPainter, QPen, QBrush, QColor, QFont, QPainterPath,
-    QImage, QPixmap, QRadialGradient, QLinearGradient,
-    QMouseEvent, QWheelEvent
+    QImage, QPixmap, QRadialGradient,
+    QMouseEvent, QWheelEvent, QRegion
+)
+
+from roco_navigator.ui.widgets.neumorphic import (
+    BG_PRIMARY, BG_SECONDARY, TEXT_PRIMARY, TEXT_SECONDARY,
+    ACCENT, SUCCESS, ERROR, SHADOW_DARK
 )
 
 logger = logging.getLogger(__name__)
-
-# ==================== 设计常量 ====================
-BG_PRIMARY = "#e0e5ec"
-BG_SECONDARY = "#f0f0f3"
-TEXT_PRIMARY = "#4a5568"
-TEXT_SECONDARY = "#718096"
-ACCENT = "#667eea"
-SUCCESS = "#48bb78"
-ERROR = "#f56565"
-SHADOW_DARK = "#b8bcc2"
 
 
 class OverlayHUD(QWidget):
@@ -51,6 +46,9 @@ class OverlayHUD(QWidget):
     # 信号
     closed = pyqtSignal()
     lock_toggled = pyqtSignal(bool)
+    crop_size_changed = pyqtSignal(int)
+    size_changed = pyqtSignal(int, int)      # width, height
+    shape_changed = pyqtSignal(str)          # shape name
 
     # 尺寸预设
     SIZES = {
@@ -59,7 +57,12 @@ class OverlayHUD(QWidget):
         "large": (400, 500),
     }
 
-    def __init__(self, parent=None, size: str = "medium"):
+    # 边缘拖拽检测区域 (px)
+    RESIZE_EDGE = 8
+
+    def __init__(self, parent=None, size: str = "medium",
+                 custom_w: int = 0, custom_h: int = 0,
+                 shape: str = "rounded_rect"):
         super().__init__(parent)
 
         # 窗口设置
@@ -69,23 +72,27 @@ class OverlayHUD(QWidget):
             Qt.Tool
         )
         self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setMouseTracking(True)
 
-        # 尺寸
-        w, h = self.SIZES.get(size, self.SIZES["medium"])
-        self.setFixedSize(w, h)
+        # 尺寸: custom overrides preset
+        if custom_w > 0 and custom_h > 0:
+            w, h = custom_w, custom_h
+        else:
+            w, h = self.SIZES.get(size, self.SIZES["medium"])
+
+        self.setMinimumSize(180, 200)
+        self.setMaximumSize(800, 800)
+        self.resize(w, h)
 
         # 布局参数 (根据尺寸自适应)
         self._padding = 10
-        self._map_size = w - self._padding * 2
         self._info_height = 75
-        self._map_rect = QRect(
-            self._padding, self._padding,
-            self._map_size, self._map_size
-        )
-        self._info_rect = QRect(
-            self._padding, self._padding + self._map_size + 8,
-            self._map_size, self._info_height
-        )
+        self._map_size = 0  # computed in _update_layout
+        self._map_rect = QRect()
+        self._info_rect = QRect()
+
+        # 形状: "rounded_rect", "rect", "circle"
+        self._shape = shape
 
         # 数据
         self._map_crop: Optional[np.ndarray] = None
@@ -101,46 +108,33 @@ class OverlayHUD(QWidget):
         self._total_targets: int = 0
         self._crop_scale: float = 1.0              # 裁剪图到显示区域的缩放比
         self._direction_to_target: float = 0.0  # degrees, 0=up
+        self._resource_rel_points: List[dict] = []
+        self._visited_indices: set = set()
+        self._current_route_index: int = 0
+
+        # 地图缩放
+        self._crop_size: int = 350
 
         # 交互状态
         self._dragging = False
         self._drag_start = QPoint()
         self._locked = False
         self._opacity = 0.92
+        self._resizing = False        # 边缘拖拽缩放中
+        self._resize_edge = ""        # "right", "bottom", "corner"
+        self._resize_start = QPoint()
+        self._resize_start_w = 0
+        self._resize_start_h = 0
 
         # 缓存
         self._bg_cache: Optional[QPixmap] = None
 
-        # Control buttons (top-left)
-        from PyQt5.QtWidgets import QPushButton
-        
-        self._lock_btn = QPushButton("🔓", self)
-        self._lock_btn.setFixedSize(28, 28)
-        self._lock_btn.move(self._padding + 4, self._padding + 4)
-        self._lock_btn.setCursor(Qt.PointingHandCursor)
-        self._lock_btn.clicked.connect(self._toggle_lock)
-        self._lock_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: rgba(224, 229, 236, 180);
-                border: none;
-                border-radius: 14px;
-                font-size: 14px;
-            }}
-            QPushButton:hover {{
-                background-color: rgba(224, 229, 236, 220);
-            }}
-        """)
-        
-        self._passthrough_btn = QPushButton("👆", self)
-        self._passthrough_btn.setFixedSize(28, 28)
-        self._passthrough_btn.move(self._padding + 36, self._padding + 4)
-        self._passthrough_btn.setCursor(Qt.PointingHandCursor)
-        self._passthrough_btn.clicked.connect(self._toggle_passthrough)
-        self._passthrough_btn.setStyleSheet(self._lock_btn.styleSheet())
-        
         self._passthrough = False
 
-        logger.info("OverlayHUD created (size=%s, %dx%d)", size, w, h)
+        # Compute initial layout
+        self._update_layout()
+
+        logger.info("OverlayHUD created (%dx%d, shape=%s)", w, h, shape)
 
     # ==================== 数据更新 ====================
 
@@ -156,7 +150,10 @@ class OverlayHUD(QWidget):
                           progress: float,
                           current_idx: int,
                           total: int,
-                          direction_to_target: float = 0.0):
+                          direction_to_target: float = 0.0,
+                           resource_rel_points: Optional[List[dict]] = None,
+                           visited_indices: Optional[set] = None,
+                           current_route_index: int = 0):
         """
         更新所有导航数据
 
@@ -174,6 +171,7 @@ class OverlayHUD(QWidget):
             progress: 总进度 (0-1)
             current_idx: 当前目标索引
             total: 总目标数
+            resource_rel_points: 资源点在裁剪图中的相对坐标列表
         """
         self._map_crop = map_crop
         self._player_rel_pos = player_rel
@@ -187,6 +185,9 @@ class OverlayHUD(QWidget):
         self._current_index = current_idx
         self._total_targets = total
         self._direction_to_target = direction_to_target
+        self._resource_rel_points = resource_rel_points or []
+        self._visited_indices = visited_indices or set()
+        self._current_route_index = current_route_index
 
         # 计算缩放比
         if map_crop is not None:
@@ -218,13 +219,21 @@ class OverlayHUD(QWidget):
         # 2. 地图区域
         self._draw_map_area(painter)
 
+        # 2.5. 资源点
+        self._draw_resource_points(painter)
+
         # 3. 信息区域
         self._draw_info_area(painter)
 
     def _draw_background(self, painter: QPainter):
-        """绘制新拟物派背景"""
+        """绘制新拟物派背景 (按形状绘制)"""
         path = QPainterPath()
-        path.addRoundedRect(QRectF(self.rect()), 16, 16)
+        if self._shape == "circle":
+            path.addEllipse(QRectF(self.rect()))
+        elif self._shape == "rect":
+            path.addRect(QRectF(self.rect()))
+        else:  # rounded_rect (default)
+            path.addRoundedRect(QRectF(self.rect()), 16, 16)
 
         # 主背景色
         painter.fillPath(path, QColor(BG_PRIMARY))
@@ -299,37 +308,49 @@ class OverlayHUD(QWidget):
         return QPointF(sx, sy)
 
     def _draw_route(self, painter: QPainter):
-        """绘制路线"""
+        """绘制路线 (visited segments in gray)"""
         if len(self._route_rel_points) < 2:
             return
 
         painter.save()
 
-        # 路线线条
-        pen = QPen(QColor(ACCENT), 3, Qt.SolidLine)
-        pen.setCapStyle(Qt.RoundCap)
-        pen.setJoinStyle(Qt.RoundJoin)
-        painter.setPen(pen)
+        # Draw segments
+        for i in range(len(self._route_rel_points) - 1):
+            p1 = self._rel_to_screen(*self._route_rel_points[i])
+            p2 = self._rel_to_screen(*self._route_rel_points[i + 1])
 
-        path = QPainterPath()
-        p0 = self._rel_to_screen(*self._route_rel_points[0])
-        path.moveTo(p0)
-        for pt in self._route_rel_points[1:]:
-            path.lineTo(self._rel_to_screen(*pt))
-        painter.drawPath(path)
+            if (i + 1) in self._visited_indices or i + 1 < self._current_route_index:
+                pen = QPen(QColor("#c0c4ca"), 2, Qt.SolidLine)
+            else:
+                pen = QPen(QColor(ACCENT), 3, Qt.SolidLine)
+            pen.setCapStyle(Qt.RoundCap)
+            painter.setPen(pen)
+            painter.drawLine(p1, p2)
 
-        # 路径点
+        # Draw waypoints
         for i, pt in enumerate(self._route_rel_points):
             if i == 0:
                 continue
             sp = self._rel_to_screen(*pt)
-            painter.setBrush(QColor(ACCENT))
-            painter.setPen(QPen(QColor("#ffffff"), 1.5))
-            painter.drawEllipse(sp, 5, 5)
 
-            # 编号
+            if i == self._current_route_index:
+                painter.setBrush(QColor(SUCCESS))
+                painter.setPen(QPen(QColor("#ffffff"), 2))
+                r = 6
+            elif i in self._visited_indices or i < self._current_route_index:
+                painter.setBrush(QColor("#a0aec0"))
+                painter.setPen(QPen(QColor("#d1d5db"), 1))
+                r = 4
+            else:
+                painter.setBrush(QColor(ACCENT))
+                painter.setPen(QPen(QColor("#ffffff"), 1.5))
+                r = 5
+
+            painter.drawEllipse(sp, r, r)
+
+            # Number label
             painter.setPen(QColor("#ffffff"))
-            painter.setFont(QFont("Arial", 7, QFont.Bold))
+            painter.setFont(QFont("Microsoft YaHei", 7, QFont.Bold))
             painter.drawText(int(sp.x()) - 3, int(sp.y()) + 3, str(i))
 
         painter.restore()
@@ -417,10 +438,46 @@ class OverlayHUD(QWidget):
         else:
             # 无目标时显示 N 标记
             painter.setPen(QColor(TEXT_SECONDARY))
-            painter.setFont(QFont("Arial", 10, QFont.Bold))
-            painter.drawText(-5, 5, "N")
+            painter.setFont(QFont("Microsoft YaHei", 10, QFont.Bold))
+            painter.drawText(-5, 5, "北")
 
         painter.restore()
+
+    def _draw_resource_points(self, painter: QPainter):
+        """Draw nearby resource points on the HUD map"""
+        if not self._resource_rel_points:
+            return
+
+        painter.save()
+        for res in self._resource_rel_points:
+            rx = res.get("rx", 0) * self._crop_scale + self._map_rect.x()
+            ry = res.get("ry", 0) * self._crop_scale + self._map_rect.y()
+
+            # Check if within map area
+            if not self._map_rect.contains(int(rx), int(ry)):
+                continue
+
+            # Draw small colored dot
+            color = self._get_resource_color(res.get("type", ""))
+            painter.setBrush(QColor(color))
+            painter.setPen(QPen(QColor("#ffffff"), 1))
+            painter.drawEllipse(QPointF(rx, ry), 3, 3)
+
+        painter.restore()
+
+    def _get_resource_color(self, res_type: str) -> str:
+        """Return a color for each resource type category"""
+        colors = {
+            "采集": "#48bb78",      # green
+            "收集": "#ed8936",      # orange
+            "宝箱": "#ecc94b",      # yellow
+            "地点": "#667eea",      # blue/purple
+            "精灵分布": "#f56565",  # red
+            "战斗": "#e53e3e",      # dark red
+            "互动事件": "#9f7aea",  # purple
+            "任务": "#38b2ac",      # teal
+        }
+        return colors.get(res_type, "#a0aec0")  # default gray
 
     def _draw_info_area(self, painter: QPainter):
         """绘制信息区域"""
@@ -442,7 +499,7 @@ class OverlayHUD(QWidget):
 
         # 距离 + ETA
         painter.setPen(QColor(TEXT_SECONDARY))
-        painter.setFont(QFont("Arial", 10))
+        painter.setFont(QFont("Microsoft YaHei", 10))
 
         dist_text = f"距离: {self._distance:.0f}"
         eta_text = f"预计: {self._eta_seconds:.0f}秒" if self._eta_seconds < 9999 else "预计: --"
@@ -471,39 +528,137 @@ class OverlayHUD(QWidget):
 
         painter.restore()
 
+    # ==================== 布局计算 ====================
+
+    def _update_layout(self):
+        """根据当前窗口尺寸重算内部布局"""
+        w, h = self.width(), self.height()
+        self._map_size = min(w - self._padding * 2,
+                             h - self._info_height - self._padding * 2 - 8)
+        self._map_size = max(50, self._map_size)
+        self._map_rect = QRect(
+            self._padding, self._padding,
+            self._map_size, self._map_size
+        )
+        self._info_rect = QRect(
+            self._padding, self._padding + self._map_size + 8,
+            w - self._padding * 2, self._info_height
+        )
+        self._bg_cache = None
+        if self._shape == "circle":
+            self.setMask(QRegion(self.rect(), QRegion.Ellipse))
+        else:
+            self.clearMask()
+        self.update()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._update_layout()
+
+    # ==================== 形状 ====================
+
+    def set_shape(self, shape: str):
+        """Set HUD shape: rounded_rect, rect, circle"""
+        if shape not in ("rounded_rect", "rect", "circle"):
+            shape = "rounded_rect"
+        self._shape = shape
+        self._update_layout()
+        self.shape_changed.emit(shape)
+
+    @property
+    def hud_shape(self) -> str:
+        return self._shape
+
     # ==================== 交互 ====================
 
-    def _toggle_lock(self):
-        self._locked = not self._locked
-        self._lock_btn.setText("🔒" if self._locked else "🔓")
-        self.lock_toggled.emit(self._locked)
-    
-    def _toggle_passthrough(self):
-        self._passthrough = not self._passthrough
-        if self._passthrough:
+    def _detect_edge(self, pos: QPoint) -> str:
+        """Detect which resize edge the mouse is on. Returns '', 'right', 'bottom', 'corner'."""
+        w, h = self.width(), self.height()
+        on_right = (w - self.RESIZE_EDGE) <= pos.x() <= w
+        on_bottom = (h - self.RESIZE_EDGE) <= pos.y() <= h
+        if on_right and on_bottom:
+            return "corner"
+        elif on_right:
+            return "right"
+        elif on_bottom:
+            return "bottom"
+        return ""
+
+    def set_passthrough_locked(self, enabled: bool):
+        """设置穿透锁定状态（合并 lock + passthrough）"""
+        if enabled:
+            self._locked = True
+            self._passthrough = True
             self.setWindowFlags(self.windowFlags() | Qt.WindowTransparentForInput)
-            self._passthrough_btn.setText("👇")
         else:
+            self._locked = False
+            self._passthrough = False
             self.setWindowFlags(self.windowFlags() & ~Qt.WindowTransparentForInput)
-            self._passthrough_btn.setText("👆")
-        self.show()  # Need to re-show after changing window flags
+        self.show()
 
     def mousePressEvent(self, event: QMouseEvent):
         if event.button() == Qt.LeftButton and not self._locked:
-            self._dragging = True
-            self._drag_start = event.globalPos() - self.pos()
-            self.setCursor(Qt.ClosedHandCursor)
+            edge = self._detect_edge(event.pos())
+            if edge:
+                self._resizing = True
+                self._resize_edge = edge
+                self._resize_start = event.globalPos()
+                self._resize_start_w = self.width()
+                self._resize_start_h = self.height()
+            else:
+                self._dragging = True
+                self._drag_start = event.globalPos() - self.pos()
+                self.setCursor(Qt.ClosedHandCursor)
         elif event.button() == Qt.RightButton:
             self._show_context_menu(event.globalPos())
 
     def mouseMoveEvent(self, event: QMouseEvent):
+        if self._resizing:
+            delta = event.globalPos() - self._resize_start
+            new_w = self._resize_start_w
+            new_h = self._resize_start_h
+            if self._resize_edge in ("right", "corner"):
+                new_w = max(180, min(800, self._resize_start_w + delta.x()))
+            if self._resize_edge in ("bottom", "corner"):
+                new_h = max(200, min(800, self._resize_start_h + delta.y()))
+            self.resize(new_w, new_h)
+            return
+
         if self._dragging:
             self.move(event.globalPos() - self._drag_start)
+            return
+
+        # Update cursor based on hover edge
+        if not self._locked:
+            edge = self._detect_edge(event.pos())
+            if edge == "corner":
+                self.setCursor(Qt.SizeFDiagCursor)
+            elif edge == "right":
+                self.setCursor(Qt.SizeHorCursor)
+            elif edge == "bottom":
+                self.setCursor(Qt.SizeVerCursor)
+            else:
+                self.setCursor(Qt.ArrowCursor)
 
     def mouseReleaseEvent(self, event: QMouseEvent):
         if event.button() == Qt.LeftButton:
+            if self._resizing:
+                self._resizing = False
+                self.size_changed.emit(self.width(), self.height())
             self._dragging = False
             self.setCursor(Qt.ArrowCursor)
+
+    def wheelEvent(self, event: QWheelEvent):
+        """Scroll wheel adjusts map crop size (zoom level)."""
+        if self._locked:
+            return
+        delta = event.angleDelta().y()
+        if delta > 0:
+            self._crop_size = max(100, self._crop_size - 50)
+        else:
+            self._crop_size = min(1500, self._crop_size + 50)
+        self.crop_size_changed.emit(self._crop_size)
+        self.update()
 
     def _show_context_menu(self, pos):
         menu = QMenu(self)
@@ -525,15 +680,46 @@ class OverlayHUD(QWidget):
             }}
         """)
 
-        lock_text = "解锁位置" if self._locked else "锁定位置"
-        lock_action = menu.addAction(lock_text)
-        lock_action.triggered.connect(lambda: self.set_locked(not self._locked))
+        # 预设大小
+        size_menu = menu.addMenu("预设大小")
+        for name, (w, h) in self.SIZES.items():
+            a = size_menu.addAction(f"{name} ({w}x{h})")
+            a.triggered.connect(lambda checked, s=name: self._resize_to(s))
+
+        # 当前大小
+        cur_w, cur_h = self.width(), self.height()
+        save_action = menu.addAction(f"当前大小: {cur_w}x{cur_h}")
+        save_action.setEnabled(False)
 
         menu.addSeparator()
 
-        for name, (w, h) in self.SIZES.items():
-            a = menu.addAction(f"大小: {name} ({w}x{h})")
-            a.triggered.connect(lambda checked, s=name: self._resize_to(s))
+        # 形状子菜单
+        shape_menu = menu.addMenu("形状")
+        shapes = [
+            ("圆角矩形", "rounded_rect"),
+            ("矩形", "rect"),
+            ("圆形", "circle"),
+        ]
+        for label, shape_key in shapes:
+            a = shape_menu.addAction(label)
+            a.setCheckable(True)
+            a.setChecked(self._shape == shape_key)
+            a.triggered.connect(
+                lambda checked, s=shape_key: self.set_shape(s)
+            )
+
+        menu.addSeparator()
+
+        # 地图缩放
+        zoom_menu = menu.addMenu("地图缩放")
+        for name, crop_val in [("极近 (150)", 150), ("近 (250)", 250), ("中 (350)", 350),
+                                ("远 (500)", 500), ("极远 (750)", 750)]:
+            a = zoom_menu.addAction(name)
+            a.triggered.connect(lambda checked, v=crop_val: self._set_crop_size(v))
+
+        # Custom zoom input
+        custom_zoom = zoom_menu.addAction("自定义...")
+        custom_zoom.triggered.connect(self._on_custom_zoom)
 
         menu.addSeparator()
 
@@ -544,23 +730,29 @@ class OverlayHUD(QWidget):
 
     def _resize_to(self, size_name: str):
         w, h = self.SIZES.get(size_name, self.SIZES["medium"])
-        self.setFixedSize(w, h)
-
-        self._map_size = w - self._padding * 2
-        self._map_rect = QRect(
-            self._padding, self._padding,
-            self._map_size, self._map_size
-        )
-        self._info_rect = QRect(
-            self._padding, self._padding + self._map_size + 8,
-            self._map_size, self._info_height
-        )
-        self._bg_cache = None
-        self.update()
+        self.resize(w, h)
+        self.size_changed.emit(w, h)
 
     def _on_close(self):
         self.hide()
         self.closed.emit()
+
+    def _set_crop_size(self, size: int):
+        self._crop_size = size
+        self.crop_size_changed.emit(size)
+
+    def _on_custom_zoom(self):
+        from PyQt5.QtWidgets import QInputDialog
+        val, ok = QInputDialog.getInt(
+            self, "自定义缩放", "地图裁剪大小 (像素):",
+            value=self._crop_size, min=100, max=1500, step=50
+        )
+        if ok:
+            self._set_crop_size(val)
+
+    @property
+    def crop_size(self) -> int:
+        return self._crop_size
 
     # ==================== 属性 ====================
 

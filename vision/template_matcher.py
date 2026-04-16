@@ -37,11 +37,14 @@ class TemplateMatcher:
 
     def __init__(self, use_gpu: bool = False):
         self._gpu_manager = get_gpu_manager()
-        self._use_gpu = use_gpu and self._gpu_manager.check_gpu_available()
+        self._use_gpu = False  # Default to False
 
-        if self._use_gpu:
-            self._gpu_manager.enable_gpu()
-            logger.info("TemplateMatcher: GPU acceleration enabled")
+        if use_gpu and self._gpu_manager.check_gpu_available():
+            if self._gpu_manager.enable_gpu():
+                self._use_gpu = True
+                logger.info("TemplateMatcher: GPU acceleration enabled")
+            else:
+                logger.info("TemplateMatcher: GPU not usable by OpenCV, CPU mode")
         else:
             logger.info("TemplateMatcher: CPU mode")
 

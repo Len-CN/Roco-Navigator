@@ -104,32 +104,6 @@ class MapManager:
         logger.info("Map loaded from array: %s (%dx%d)", map_id, self._map_width, self._map_height)
         return True
 
-    def scan_available_maps(self) -> List[MapInfo]:
-        """扫描可用的地图文件"""
-        self._available_maps = []
-        os.makedirs(self._maps_dir, exist_ok=True)
-
-        for filename in os.listdir(self._maps_dir):
-            if filename.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp')):
-                filepath = os.path.join(self._maps_dir, filename)
-                try:
-                    img = cv2.imread(filepath)
-                    if img is not None:
-                        h, w = img.shape[:2]
-                        map_id = os.path.splitext(filename)[0]
-                        self._available_maps.append(MapInfo(
-                            map_id=map_id,
-                            name=map_id,
-                            width=w,
-                            height=h,
-                            image_path=filepath
-                        ))
-                except Exception:
-                    pass
-
-        logger.info("Found %d maps in %s", len(self._available_maps), self._maps_dir)
-        return self._available_maps
-
     # ==================== 地图区域获取 ====================
 
     def get_logic_region(self, x: int, y: int, w: int, h: int) -> Optional[np.ndarray]:

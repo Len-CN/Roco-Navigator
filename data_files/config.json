@@ -1,21 +1,22 @@
 {
   "minimap": {
     "region": {
-      "x": 0,
-      "y": 0,
-      "width": 200,
-      "height": 200
+      "x": 1721,
+      "y": 44,
+      "width": 170,
+      "height": 170
     },
-    "calibrated": false
+    "calibrated": true
   },
   "tracking": {
     "update_interval": 100,
     "position_threshold": 5,
     "teleport_threshold": 100,
-    "max_history": 10
+    "max_history": 10,
+    "detection_mode": "ai"
   },
   "ui": {
-    "overlay_enabled": true,
+    "overlay_enabled": false,
     "overlay_opacity": 0.85,
     "overlay_position": {
       "x": 50,
@@ -27,12 +28,13 @@
     },
     "show_route_line": true,
     "show_distance": true,
-    "show_compass": false,
-    "theme": "neumorphism"
+    "show_compass": true,
+    "theme": "neumorphism",
+    "hud_crop_size": 250
   },
   "performance": {
-    "max_fps": 60,
     "image_scale": 1.0,
+    "max_fps": 60,
     "use_gpu": true,
     "gpu_device_id": 0,
     "gpu_auto_fallback": true
@@ -54,7 +56,7 @@
   },
   "navigation": {
     "arrival_distance": 20,
-    "route_strategy": "optimal",
+    "route_strategy": "auto",
     "use_2opt": true,
     "show_eta": true
   },

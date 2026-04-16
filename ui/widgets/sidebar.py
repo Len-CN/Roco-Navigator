@@ -8,7 +8,7 @@
 import logging
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QPushButton, QComboBox, QCheckBox, QScrollArea,
+    QPushButton, QCheckBox, QScrollArea,
     QFrame, QSpacerItem, QSizePolicy
 )
 from PyQt5.QtCore import Qt, pyqtSignal
@@ -16,11 +16,13 @@ from PyQt5.QtGui import QColor, QFont
 
 from roco_navigator.ui.widgets.neumorphic import (
     NeumorphicButton, NeumorphicCard, NeumorphicLabel,
-    NeumorphicSeparator, NeumorphicProgress, StatusIndicator,
+    NeumorphicSeparator, NeumorphicProgress, NeumorphicComboBox,
+    StatusIndicator,
     BG_PRIMARY, BG_SECONDARY, BG_CARD, TEXT_PRIMARY,
     TEXT_SECONDARY, TEXT_DISABLED, ACCENT, SUCCESS, WARNING, ERROR,
     apply_shadow
 )
+from roco_navigator.ui.dialogs.filter_dialog import FilterDialog
 
 logger = logging.getLogger(__name__)
 
@@ -64,9 +66,11 @@ class Sidebar(QWidget):
     stop_nav_clicked = pyqtSignal()
     update_points_clicked = pyqtSignal()
     update_map_clicked = pyqtSignal()
-    filter_type_changed = pyqtSignal(str)   # resource type filter changed
-    plan_route_for_type = pyqtSignal(str)   # plan route for a specific type
+    filter_type_changed = pyqtSignal(object)   # emits a set of selected mark_type_names
+    plan_route_for_type = pyqtSignal(object)   # emits a set of selected mark_type_names
+    select_region_for_route = pyqtSignal()   # request map canvas to enter selection mode
     toggle_overlay_clicked = pyqtSignal(bool)
+    overlay_passthrough_clicked = pyqtSignal(bool)
     settings_clicked = pyqtSignal()
 
     def __init__(self, parent=None):
@@ -197,6 +201,30 @@ class Sidebar(QWidget):
         overlay_row.addWidget(self._overlay_check)
         display_section.add_layout(overlay_row)
 
+        # 悬浮窗穿透开关
+        passthrough_row = QHBoxLayout()
+        passthrough_label = NeumorphicLabel("悬浮窗穿透", level="body")
+        self._overlay_passthrough_check = QCheckBox()
+        self._overlay_passthrough_check.setChecked(False)
+        self._overlay_passthrough_check.setStyleSheet(f"""
+            QCheckBox::indicator {{
+                width: 40px;
+                height: 20px;
+                border-radius: 10px;
+                background-color: #d1d5db;
+            }}
+            QCheckBox::indicator:checked {{
+                background-color: {ACCENT};
+            }}
+        """)
+        self._overlay_passthrough_check.stateChanged.connect(
+            lambda state: self.overlay_passthrough_clicked.emit(state == Qt.Checked)
+        )
+        passthrough_row.addWidget(passthrough_label)
+        passthrough_row.addStretch()
+        passthrough_row.addWidget(self._overlay_passthrough_check)
+        display_section.add_layout(passthrough_row)
+
         content_layout.addWidget(display_section)
         content_layout.addWidget(NeumorphicSeparator())
 
@@ -214,40 +242,37 @@ class Sidebar(QWidget):
         update_row.addWidget(self._update_map_btn)
         data_section.add_layout(update_row)
 
-        # 点位类型筛选
-        filter_label = NeumorphicLabel("点位筛选:", level="caption")
-        data_section.add_widget(filter_label)
+        data_section.add_widget(NeumorphicSeparator())
 
-        self._type_filter = QComboBox()
-        self._type_filter.setStyleSheet(f"""
-            QComboBox {{
-                background-color: {BG_PRIMARY};
-                color: {TEXT_PRIMARY};
-                border: none;
-                border-radius: 8px;
-                padding: 8px 12px;
-                font-size: 13px;
-            }}
-            QComboBox::drop-down {{
-                border: none;
-                width: 20px;
-            }}
-            QComboBox QAbstractItemView {{
-                background-color: {BG_SECONDARY};
-                color: {TEXT_PRIMARY};
-                selection-background-color: {ACCENT};
-                selection-color: white;
-                border-radius: 4px;
-            }}
-        """)
-        self._type_filter.addItem("全部类型")
-        self._type_filter.currentTextChanged.connect(self._on_filter_changed)
-        data_section.add_widget(self._type_filter)
+        # 点位筛选按钮 + 状态标签
+        filter_row = QHBoxLayout()
+        filter_row.setSpacing(8)
+        self._filter_btn = NeumorphicButton("点位筛选")
+        self._filter_btn.clicked.connect(self._open_filter_dialog)
+        filter_row.addWidget(self._filter_btn)
+        data_section.add_layout(filter_row)
 
-        # 路线规划按钮
-        self._plan_for_type_btn = NeumorphicButton("为当前类型规划路线")
+        self._filter_status_label = NeumorphicLabel("显示全部", level="caption")
+        data_section.add_widget(self._filter_status_label)
+
+        # 内部状态: 筛选数据
+        self._grouped_data = {}          # {type_name: [mark_type_name, ...]}
+        self._point_counts = {}          # {mark_type_name: count}
+        self._selected_mark_type_names = set()
+
+        # 路线规划: 区域选择 + 规划按钮
+        plan_row = QHBoxLayout()
+        plan_row.setSpacing(8)
+
+        self._plan_scope = NeumorphicComboBox()
+        self._plan_scope.addItems(["全图", "框选区域"])
+        self._plan_scope.setFixedWidth(110)
+        plan_row.addWidget(self._plan_scope)
+
+        self._plan_for_type_btn = NeumorphicButton("规划路线")
         self._plan_for_type_btn.clicked.connect(self._on_plan_for_type)
-        data_section.add_widget(self._plan_for_type_btn)
+        plan_row.addWidget(self._plan_for_type_btn)
+        data_section.add_layout(plan_row)
 
         self._data_info_label = NeumorphicLabel("暂无数据", level="caption")
         data_section.add_widget(self._data_info_label)
@@ -312,21 +337,51 @@ class Sidebar(QWidget):
         self.stop_nav_clicked.emit()
 
     def set_type_filter_items(self, types: list):
-        """Set available resource types for filtering"""
-        current = self._type_filter.currentText()
-        self._type_filter.clear()
-        self._type_filter.addItem("全部类型")
-        for t in types:
-            self._type_filter.addItem(t)
-        idx = self._type_filter.findText(current)
-        if idx >= 0:
-            self._type_filter.setCurrentIndex(idx)
+        """Set available resource types for filtering (backward compat).
+        Converts flat list to grouped dict and calls set_type_filter_items_grouped.
+        """
+        grouped = {t: [] for t in types}
+        self.set_type_filter_items_grouped(grouped)
 
-    def _on_filter_changed(self, text: str):
-        filter_val = "" if text == "全部类型" else text
-        self.filter_type_changed.emit(filter_val)
+    def set_type_filter_items_grouped(self, grouped: dict, point_counts: dict = None):
+        """Store grouped mark_type_names data for the filter dialog.
+
+        Args:
+            grouped: {type_name: [mark_type_name_1, mark_type_name_2, ...], ...}
+            point_counts: {mark_type_name: count, ...}
+        """
+        self._grouped_data = grouped
+        if point_counts is not None:
+            self._point_counts = point_counts
+
+    def _get_selected_mark_type_names(self) -> set:
+        """Collect all selected mark_type_names."""
+        return set(self._selected_mark_type_names)
+
+    def _open_filter_dialog(self):
+        """Open the filter dialog."""
+        dialog = FilterDialog(
+            grouped_data=self._grouped_data,
+            point_counts=self._point_counts,
+            current_selection=self._selected_mark_type_names,
+            parent=self,
+        )
+        dialog.filter_applied.connect(self._on_filter_applied)
+        dialog.exec_()
+
+    def _on_filter_applied(self, selected: set):
+        """Handle filter dialog result."""
+        self._selected_mark_type_names = set(selected)
+        # Update status label
+        if not selected:
+            self._filter_status_label.setText("显示全部")
+        else:
+            self._filter_status_label.setText(f"已选 {len(selected)} 种")
+        self.filter_type_changed.emit(selected)
 
     def _on_plan_for_type(self):
-        current = self._type_filter.currentText()
-        filter_val = "" if current == "全部类型" else current
-        self.plan_route_for_type.emit(filter_val)
+        if self._plan_scope.currentText() == "框选区域":
+            self.select_region_for_route.emit()
+        else:
+            selected = self._get_selected_mark_type_names()
+            self.plan_route_for_type.emit(selected)

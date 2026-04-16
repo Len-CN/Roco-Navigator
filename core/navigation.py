@@ -66,6 +66,7 @@ class Navigator:
         self._target_names: List[str] = []
         self._current_index: int = 0
         self._player_pos: Optional[Tuple[float, float]] = None
+        self._visited: set = set()  # indices of visited targets
 
         # 速度估算
         self._last_pos: Optional[Tuple[float, float]] = None
@@ -101,11 +102,12 @@ class Navigator:
         self._current_index = max(1, start_index)  # 至少从 1 开始 (跳过起点)
         self._state = NavigationState.NAVIGATING
         self._speed_samples.clear()
+        self._visited.clear()
 
         if target_names:
             self._target_names = list(target_names)
         else:
-            self._target_names = [f"Point {i}" for i in range(len(route))]
+            self._target_names = [f"点位 {i}" for i in range(len(route))]
 
         logger.info("Navigation started: %d targets", len(route) - 1)
 
@@ -169,6 +171,7 @@ class Navigator:
 
     def _advance_target(self):
         """前进到下一个目标"""
+        self._visited.add(self._current_index)  # mark current target as visited
         self._current_index += 1
         if self._current_index >= len(self._route):
             self._state = NavigationState.ARRIVED
@@ -215,7 +218,7 @@ class Navigator:
 
     @staticmethod
     def _direction_text(angle: float) -> str:
-        directions = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
+        directions = ["北", "东北", "东", "东南", "南", "西南", "西", "西北"]
         idx = round(angle / 45) % 8
         return directions[idx]
 
@@ -289,3 +292,7 @@ class Navigator:
     @property
     def is_active(self) -> bool:
         return self._state == NavigationState.NAVIGATING
+
+    @property
+    def visited_indices(self) -> set:
+        return self._visited.copy()

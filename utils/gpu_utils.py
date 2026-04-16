@@ -50,7 +50,7 @@ class GPUManager:
                     }
                 logger.info("CUDA available via PyTorch: %d device(s)", self.device_count)
                 return
-        except ImportError:
+        except Exception:
             pass
         
         # Method 3: Check nvidia-smi

@@ -8,6 +8,7 @@ SIFT 特征匹配器
 """
 
 import logging
+import time
 import cv2
 import numpy as np
 from typing import Optional, Tuple, List
@@ -75,6 +76,19 @@ class SIFTMatcher:
         # 统计信息
         self._total_matches = 0
         self._successful_matches = 0
+
+        # Pre-computed map features (populated by precompute_map_features)
+        self._map_keypoints = None       # full list of cv2.KeyPoint
+        self._map_descriptors = None     # full numpy array of descriptors
+        self._map_precomputed = False
+
+        # Spatial grid index for efficient local search
+        self._grid_cell_size = 256       # pixels per grid cell
+        self._grid_index = {}            # {(gx, gy): [indices into _map_keypoints]}
+        self._map_shape = (0, 0)         # (height, width) of precomputed map
+
+        # FLANN trained state for full precomputed set
+        self._full_flann_trained = False
 
         logger.info(
             "SIFTMatcher initialized (ratio=%.2f, min_matches=%d, ransac=%.1f)",
@@ -201,6 +215,225 @@ class SIFTMatcher:
             inliers=inliers,
             confidence=confidence
         )
+
+    # ==================== Pre-computed matching ====================
+
+    def precompute_map_features(self, map_gray: np.ndarray) -> int:
+        """
+        Pre-compute SIFT features for the entire world map.
+        Call once at startup after map is loaded.
+
+        Args:
+            map_gray: Grayscale world map image (already preprocessed)
+
+        Returns:
+            Number of features extracted
+        """
+        logger.info("Pre-computing SIFT features for world map (%dx%d)...",
+                     map_gray.shape[1], map_gray.shape[0])
+
+        start_time = time.perf_counter()
+        self._map_shape = map_gray.shape[:2]
+
+        # Detect and compute features on the full map
+        self._map_keypoints, self._map_descriptors = self._sift.detectAndCompute(map_gray, None)
+
+        if self._map_descriptors is None or len(self._map_descriptors) == 0:
+            logger.warning("No features found in world map!")
+            self._map_precomputed = False
+            return 0
+
+        # Build spatial grid index
+        self._grid_index.clear()
+        for i, kp in enumerate(self._map_keypoints):
+            gx = int(kp.pt[0]) // self._grid_cell_size
+            gy = int(kp.pt[1]) // self._grid_cell_size
+            key = (gx, gy)
+            if key not in self._grid_index:
+                self._grid_index[key] = []
+            self._grid_index[key].append(i)
+
+        self._map_precomputed = True
+        # Reset FLANN trained state so it rebuilds with new descriptors
+        self._full_flann_trained = False
+
+        elapsed = time.perf_counter() - start_time
+        logger.info("Pre-computed %d SIFT features in %.1fs (%d grid cells)",
+                     len(self._map_keypoints), elapsed, len(self._grid_index))
+        return len(self._map_keypoints)
+
+    def match_precomputed(self, minimap_gray: np.ndarray,
+                          search_center: Optional[Tuple[float, float]] = None,
+                          search_radius: float = 500,
+                          minimap_mask: Optional[np.ndarray] = None) -> MatchResult:
+        """
+        Match minimap against pre-computed map features.
+
+        If search_center is provided, only match against features within
+        search_radius of that point (using spatial grid index).
+        If search_center is None, match against ALL map features (global search).
+
+        Args:
+            minimap_gray: Preprocessed grayscale minimap image
+            search_center: Optional (x, y) center for local search
+            search_radius: Search radius in pixels (used with search_center)
+            minimap_mask: Optional mask for minimap feature detection
+
+        Returns:
+            MatchResult with absolute world coordinates
+        """
+        if not self._map_precomputed:
+            return MatchResult(success=False)
+
+        self._total_matches += 1
+
+        # Extract minimap features
+        kp1, des1 = self.detect_and_compute(minimap_gray, minimap_mask)
+        if des1 is None or len(des1) < 2:
+            return MatchResult(success=False)
+
+        # Get map features (filtered by search area or all)
+        if search_center is not None:
+            # Use spatial grid to get nearby features
+            map_kp, map_des = self._get_features_in_radius(
+                search_center[0], search_center[1], search_radius)
+        else:
+            # Global search: use all features
+            map_kp = self._map_keypoints
+            map_des = self._map_descriptors
+
+        if map_des is None or len(map_des) < 2:
+            return MatchResult(success=False)
+
+        # FLANN match
+        try:
+            if search_center is not None and len(map_des) < len(self._map_descriptors):
+                # For subsets, use a temporary FLANN matcher
+                flann = cv2.FlannBasedMatcher(
+                    dict(algorithm=1, trees=5), dict(checks=50))
+                matches = flann.knnMatch(des1, map_des, k=2)
+            else:
+                # Use the persistent matcher for full set
+                if not self._full_flann_trained:
+                    self._flann.clear()
+                    self._flann.add([self._map_descriptors])
+                    self._flann.train()
+                    self._full_flann_trained = True
+                matches = self._flann.knnMatch(des1, k=2)
+        except cv2.error as e:
+            logger.debug("FLANN matching failed: %s", e)
+            return MatchResult(success=False)
+
+        # Lowe's ratio test
+        good_matches = []
+        for pair in matches:
+            if len(pair) == 2:
+                m, n = pair
+                if m.distance < self._ratio_threshold * n.distance:
+                    good_matches.append(m)
+
+        if len(good_matches) < self._min_good_matches:
+            logger.debug("Not enough good matches: %d < %d",
+                         len(good_matches), self._min_good_matches)
+            return MatchResult(success=False, good_matches=len(good_matches))
+
+        # Extract matched points (map features have absolute coords)
+        src_pts = np.float32(
+            [kp1[m.queryIdx].pt for m in good_matches]
+        ).reshape(-1, 1, 2)
+        dst_pts = np.float32(
+            [map_kp[m.trainIdx].pt for m in good_matches]
+        ).reshape(-1, 1, 2)
+
+        # RANSAC homography
+        H, mask = cv2.findHomography(
+            src_pts, dst_pts,
+            cv2.RANSAC,
+            self._ransac_threshold
+        )
+
+        if H is None:
+            logger.debug("Homography computation failed")
+            return MatchResult(success=False, good_matches=len(good_matches))
+
+        inliers = int(mask.sum()) if mask is not None else 0
+
+        # Transform minimap center to absolute world coordinates
+        h, w = minimap_gray.shape[:2]
+        center = np.float32([[[w / 2, h / 2]]])
+        world_point = cv2.perspectiveTransform(center, H)
+        world_x = float(world_point[0][0][0])
+        world_y = float(world_point[0][0][1])
+
+        # Compute confidence
+        confidence = min(1.0, inliers / max(self._min_good_matches, 1))
+
+        self._successful_matches += 1
+
+        logger.debug(
+            "Precomputed match success: pos=(%.1f, %.1f), good=%d, inliers=%d, conf=%.2f",
+            world_x, world_y, len(good_matches), inliers, confidence
+        )
+
+        return MatchResult(
+            success=True,
+            position=(world_x, world_y),
+            homography=H,
+            good_matches=len(good_matches),
+            inliers=inliers,
+            confidence=confidence
+        )
+
+    def _get_features_in_radius(self, cx: float, cy: float,
+                                radius: float) -> Tuple[Optional[List], Optional[np.ndarray]]:
+        """
+        Get pre-computed features within a radius of a point, using grid index.
+
+        Args:
+            cx: Center x coordinate
+            cy: Center y coordinate
+            radius: Search radius in pixels
+
+        Returns:
+            (keypoints_subset, descriptors_subset) or (None, None)
+        """
+        cell = self._grid_cell_size
+        gx_min = int((cx - radius) // cell)
+        gx_max = int((cx + radius) // cell)
+        gy_min = int((cy - radius) // cell)
+        gy_max = int((cy + radius) // cell)
+
+        indices = []
+        for gx in range(gx_min, gx_max + 1):
+            for gy in range(gy_min, gy_max + 1):
+                cell_indices = self._grid_index.get((gx, gy), [])
+                indices.extend(cell_indices)
+
+        if not indices:
+            return None, None
+
+        # Filter by actual radius (circle, not square)
+        radius_sq = radius * radius
+        filtered = []
+        for i in indices:
+            kp = self._map_keypoints[i]
+            dx = kp.pt[0] - cx
+            dy = kp.pt[1] - cy
+            if dx * dx + dy * dy <= radius_sq:
+                filtered.append(i)
+
+        if not filtered:
+            return None, None
+
+        kp_subset = [self._map_keypoints[i] for i in filtered]
+        des_subset = self._map_descriptors[filtered]
+
+        return kp_subset, des_subset
+
+    @property
+    def is_precomputed(self) -> bool:
+        """Whether map features have been pre-computed."""
+        return self._map_precomputed
 
     def get_stats(self) -> dict:
         """获取匹配统计信息"""

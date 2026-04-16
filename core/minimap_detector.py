@@ -16,6 +16,7 @@ from roco_navigator.vision.image_processor import ImageProcessor
 from roco_navigator.vision.sift_matcher import SIFTMatcher, MatchResult
 from roco_navigator.vision.color_detector import ColorDetector, ColorDetectResult
 from roco_navigator.vision.template_matcher import TemplateMatcher
+from roco_navigator.vision.arrow_detector import ArrowDetector
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +24,7 @@ logger = logging.getLogger(__name__)
 class DetectionStrategy(Enum):
     """检测策略"""
     SIFT = "sift"              # SIFT 特征匹配 (默认)
+    AI = "ai"                  # LoFTR 神经网络匹配
     COLOR = "color"            # 颜色检测 (降级)
     PREDICTION = "prediction"  # 运动预测 (最终降级)
 
@@ -36,6 +38,8 @@ class DetectionResult:
     confidence: float = 0.0
     minimap_visible: bool = True
     details: str = ""
+    direction: float = 0.0  # 朝向角度 (0=北, 90=东, 180=南, 270=西)
+    arrow_patch: Optional[np.ndarray] = None  # 24x24 BGR crop of the player arrow
 
 
 @dataclass
@@ -118,12 +122,18 @@ class MinimapDetector:
         )
         self._color_detector = ColorDetector(preset="player_red")
         self._template_matcher = TemplateMatcher(use_gpu=use_gpu)
+        self._arrow_detector = ArrowDetector()
 
         # 状态
         self._history = PositionHistory()
         self._minimap_template: Optional[np.ndarray] = None  # 小地图边框模板
         self._hidden_count = 0
         self._hidden_threshold = 5
+
+        # LoFTR matcher (optional, requires torch+kornia)
+        self._loftr_matcher = None
+        self._use_ai = False
+        self._detection_mode = "sift"  # "sift", "ai", "hybrid"
 
         # 可见性检测参数
         self._visibility_edge_ratio = 0.05
@@ -202,23 +212,61 @@ class MinimapDetector:
                 min(h, w), self._ring_outer, self._ring_inner
             )
 
-        # Step 2: SIFT 特征匹配
-        sift_result = self._sift_matcher.match(
-            minimap_gray, region_gray,
-            minimap_mask=minimap_mask,
-            region_offset=region_offset
-        )
+        # Step 2: SIFT 特征匹配 (skip if mode is "ai")
+        if self._detection_mode != "ai":
+            if self._sift_matcher.is_precomputed:
+                # Use precomputed features with spatial search
+                search_center = self._history.last
+                search_radius = 500  # pixels
+                sift_result = self._sift_matcher.match_precomputed(
+                    minimap_gray,
+                    search_center=search_center,
+                    search_radius=search_radius,
+                    minimap_mask=minimap_mask
+                )
+            else:
+                # Fallback: original region-based matching
+                sift_result = self._sift_matcher.match(
+                    minimap_gray, region_gray,
+                    minimap_mask=minimap_mask,
+                    region_offset=region_offset
+                )
 
-        if sift_result.success and self._validate_position(sift_result.position):
-            self._history.add(sift_result.position)
-            return DetectionResult(
-                success=True,
-                position=sift_result.position,
-                strategy=DetectionStrategy.SIFT,
-                confidence=sift_result.confidence,
-                details=f"SIFT match: {sift_result.good_matches} matches, "
-                        f"{sift_result.inliers} inliers"
+            if sift_result.success and self._validate_position(sift_result.position):
+                self._history.add(sift_result.position)
+                result = DetectionResult(
+                    success=True,
+                    position=sift_result.position,
+                    strategy=DetectionStrategy.SIFT,
+                    confidence=sift_result.confidence,
+                    details=f"SIFT match: {sift_result.good_matches} matches, "
+                            f"{sift_result.inliers} inliers"
+                )
+                self._enrich_with_arrow(result, minimap_bgr)
+                return result
+
+        # Step 2.5: LoFTR AI matching
+        # Runs when: mode is "ai", or mode is "hybrid" and SIFT failed
+        use_ai_now = (
+            self._detection_mode == "ai"
+            or (self._detection_mode == "hybrid" and self._use_ai)
+        )
+        if use_ai_now and self._loftr_matcher is not None:
+            ai_result = self._loftr_matcher.match(
+                minimap_bgr, map_region_bgr, region_offset
             )
+            if ai_result.success and self._validate_position(ai_result.position):
+                self._history.add(ai_result.position)
+                result = DetectionResult(
+                    success=True,
+                    position=ai_result.position,
+                    strategy=DetectionStrategy.AI,
+                    confidence=ai_result.confidence,
+                    details=f"LoFTR match: {ai_result.num_matches} matches, "
+                            f"{ai_result.inliers} inliers"
+                )
+                self._enrich_with_arrow(result, minimap_bgr)
+                return result
 
         # Step 3: 颜色检测降级
         color_result = self._color_detector.detect(minimap_bgr)
@@ -226,13 +274,15 @@ class MinimapDetector:
             # 颜色检测得到的是小地图坐标，需要转换
             # 这里简化处理：如果有历史位置，在附近搜索
             if self._history.last:
-                return DetectionResult(
+                result = DetectionResult(
                     success=True,
                     position=self._history.last,
                     strategy=DetectionStrategy.COLOR,
                     confidence=color_result.confidence * 0.5,
                     details="Color detection (approximate)"
                 )
+                self._enrich_with_arrow(result, minimap_bgr)
+                return result
 
         # Step 4: 运动预测降级
         predicted = self._history.predict_next()
@@ -251,6 +301,25 @@ class MinimapDetector:
         )
 
     # ==================== 可见性检测 ====================
+
+    def _enrich_with_arrow(self, result: DetectionResult, minimap_bgr: np.ndarray):
+        """Extract arrow patch and detect direction from minimap center"""
+        # Extract player arrow patch from minimap center
+        arrow_size = 16  # half-size of the arrow extraction area
+        mh, mw = minimap_bgr.shape[:2]
+        cy, cx = mh // 2, mw // 2
+        a_y1 = max(0, cy - arrow_size)
+        a_y2 = min(mh, cy + arrow_size)
+        a_x1 = max(0, cx - arrow_size)
+        a_x2 = min(mw, cx + arrow_size)
+        result.arrow_patch = minimap_bgr[a_y1:a_y2, a_x1:a_x2].copy()
+
+        # Try to detect player direction from arrow
+        arrow_direction = self._arrow_detector.detect_direction(minimap_bgr)
+        if arrow_direction is not None:
+            result.direction = arrow_direction
+
+    # ==================== 可见性检测 (continued) ====================
 
     def is_minimap_visible(self, minimap_region: np.ndarray) -> bool:
         """
@@ -355,6 +424,75 @@ class MinimapDetector:
 
     # ==================== 公共方法 ====================
 
+    def set_detection_mode(self, mode: str):
+        """
+        Set the detection mode.
+
+        Args:
+            mode: "sift" (SIFT only), "ai" (LoFTR only), "hybrid" (SIFT + AI fallback)
+        """
+        if mode not in ("sift", "ai", "hybrid"):
+            logger.warning("Unknown detection mode '%s', defaulting to 'sift'", mode)
+            mode = "sift"
+
+        # For "ai" or "hybrid", ensure AI mode is initialized
+        if mode in ("ai", "hybrid"):
+            if self._loftr_matcher is None:
+                if not self.enable_ai_mode(True):
+                    logger.warning("AI mode unavailable, falling back to 'sift'")
+                    self._detection_mode = "sift"
+                    self._use_ai = False
+                    return
+            self._use_ai = True
+        elif mode == "sift":
+            self._use_ai = False
+
+        self._detection_mode = mode
+        logger.info("Detection mode set to '%s'", mode)
+
+    @property
+    def detection_mode(self) -> str:
+        return self._detection_mode
+
+    def enable_ai_mode(self, enabled: bool = True) -> bool:
+        """
+        Enable/disable AI (LoFTR) matching mode.
+
+        LoFTR is used as a fallback when SIFT matching fails.
+        Requires torch and kornia to be installed.
+
+        Args:
+            enabled: True to enable, False to disable
+
+        Returns:
+            True if the mode was set successfully
+        """
+        if enabled:
+            try:
+                from roco_navigator.vision.loftr_matcher import is_loftr_available, LoFTRMatcher
+                logger.info("LoFTR module imported successfully")
+            except (ImportError, OSError, RuntimeError) as e:
+                logger.warning("Cannot import LoFTR module: %s", e)
+                self._use_ai = False
+                return False
+            if not is_loftr_available():
+                logger.warning("LoFTR not available - torch/kornia not installed")
+                self._use_ai = False
+                return False
+            if self._loftr_matcher is None:
+                try:
+                    self._loftr_matcher = LoFTRMatcher()
+                    logger.info("LoFTR AI mode enabled")
+                except Exception as e:
+                    logger.error("Failed to initialize LoFTR: %s", e)
+                    self._use_ai = False
+                    return False
+            self._use_ai = True
+            return True
+        else:
+            self._use_ai = False
+            return True
+
     def reset(self):
         """重置检测器状态"""
         self._history.clear()
@@ -379,3 +517,43 @@ class MinimapDetector:
     @property
     def position_history(self) -> List[Tuple[float, float]]:
         return self._history.positions.copy()
+
+    @property
+    def is_ai_available(self) -> bool:
+        """Whether AI (LoFTR) matcher is initialized and ready."""
+        return self._loftr_matcher is not None
+
+    @property
+    def should_use_ai_fallback(self) -> bool:
+        """Whether AI fallback should be attempted on SIFT failure."""
+        return (self._detection_mode in ("ai", "hybrid")
+                and self._loftr_matcher is not None)
+
+    def try_ai_match(self, minimap_bgr, map_region_bgr, region_offset):
+        """Attempt LoFTR AI matching. Returns (success, result) or (False, None)."""
+        if self._loftr_matcher is None:
+            return False, None
+        ai_result = self._loftr_matcher.match(
+            minimap_bgr, map_region_bgr, region_offset
+        )
+        if ai_result.success:
+            return True, ai_result
+        return False, None
+
+    def precompute_map(self, map_gray: np.ndarray) -> int:
+        """
+        Pre-compute SIFT features for the world map.
+
+        Applies the same CLAHE preprocessing used during matching,
+        then delegates to SIFTMatcher.precompute_map_features().
+
+        Args:
+            map_gray: Grayscale world map image
+
+        Returns:
+            Number of features extracted
+        """
+        processed = self._image_processor.preprocess_map_region(
+            map_gray, use_clahe=self._use_clahe
+        )
+        return self._sift_matcher.precompute_map_features(processed)

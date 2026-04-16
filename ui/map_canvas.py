@@ -25,6 +25,7 @@ class MapCanvas(QWidget):
 
     # 信号
     position_clicked = pyqtSignal(float, float)  # 点击地图上的位置
+    region_selected = pyqtSignal(float, float, float, float)  # x1, y1, x2, y2 in world coords
 
     # 缩放限制
     MIN_ZOOM = 0.1
@@ -72,6 +73,7 @@ class MapCanvas(QWidget):
         # 路线
         self._route_points: List[QPointF] = []
         self._current_target_index: int = -1
+        self._visited_indices: set = set()
 
         # 资源点
         self._resource_points: List[dict] = []
@@ -86,7 +88,35 @@ class MapCanvas(QWidget):
         # 启用鼠标追踪
         self.setMouseTracking(True)
 
+        # Region selection mode (for route planning)
+        self._selecting_region = False
+        self._sel_start: Optional[QPointF] = None
+        self._sel_current: Optional[QPointF] = None
+        self._selected_region: Optional[QRectF] = None  # world coords
+
     # ==================== Public API ====================
+
+    def start_region_selection(self):
+        """Enter rectangle region selection mode."""
+        self._selecting_region = True
+        self._sel_start = None
+        self._sel_current = None
+        self._selected_region = None
+        self.setCursor(Qt.CrossCursor)
+        self.update()
+
+    def cancel_region_selection(self):
+        """Cancel region selection mode."""
+        self._selecting_region = False
+        self._sel_start = None
+        self._sel_current = None
+        self.setCursor(Qt.ArrowCursor)
+        self.update()
+
+    def clear_selected_region(self):
+        """Clear the highlighted selected region."""
+        self._selected_region = None
+        self.update()
 
     def load_map_image(self, image_path: str) -> bool:
         """加载地图图像"""
@@ -129,7 +159,7 @@ class MapCanvas(QWidget):
                 bytes_per_line = w
 
             q_image = QImage(image_array.data, w, h, bytes_per_line, fmt)
-            if ch == 3:
+            if len(image_array.shape) == 3 and image_array.shape[2] == 3:
                 q_image = q_image.rgbSwapped()
 
             self._map_image = QPixmap.fromImage(q_image)
@@ -153,10 +183,12 @@ class MapCanvas(QWidget):
         self._player_visible = False
         self.update()
 
-    def set_route(self, points: List[Tuple[float, float]], current_index: int = 0):
+    def set_route(self, points: List[Tuple[float, float]], current_index: int = 0,
+                  visited: set = None):
         """设置路线"""
         self._route_points = [QPointF(x, y) for x, y in points]
         self._current_target_index = current_index
+        self._visited_indices = visited or set()
         self.update()
 
     def clear_route(self):
@@ -246,13 +278,16 @@ class MapCanvas(QWidget):
         # 绘制路线
         self._draw_route(painter)
 
+        # Draw region selection overlay
+        self._draw_selection_rect(painter)
+
         # 绘制玩家
         if self._player_visible:
             self._draw_player(painter)
 
     def _draw_placeholder(self, painter: QPainter):
         painter.setPen(QColor("#a0aec0"))
-        painter.setFont(QFont("Arial", 16))
+        painter.setFont(QFont("Microsoft YaHei", 16))
         painter.drawText(self.rect(), Qt.AlignCenter, self._placeholder_text)
 
     def _draw_map(self, painter: QPainter):
@@ -292,31 +327,37 @@ class MapCanvas(QWidget):
 
         painter.save()
 
-        # 路线线条
-        pen = QPen(QColor("#667eea"), max(2, int(2 / self._zoom)), Qt.SolidLine)
-        pen.setCapStyle(Qt.RoundCap)
-        pen.setJoinStyle(Qt.RoundJoin)
-        painter.setPen(pen)
+        # Draw route segments
+        for i in range(len(self._route_points) - 1):
+            p1 = self.world_to_screen(self._route_points[i].x(), self._route_points[i].y())
+            p2 = self.world_to_screen(self._route_points[i + 1].x(), self._route_points[i + 1].y())
 
-        path = QPainterPath()
-        sp = self.world_to_screen(self._route_points[0].x(), self._route_points[0].y())
-        path.moveTo(sp)
-        for pt in self._route_points[1:]:
-            sp = self.world_to_screen(pt.x(), pt.y())
-            path.lineTo(sp)
-        painter.drawPath(path)
+            if i + 1 <= self._current_target_index or (i + 1) in self._visited_indices:
+                # Visited segment — gray
+                pen = QPen(QColor("#c0c4ca"), max(2, int(2 / self._zoom)), Qt.SolidLine)
+            else:
+                # Upcoming segment — accent blue
+                pen = QPen(QColor("#667eea"), max(2, int(2 / self._zoom)), Qt.SolidLine)
+            pen.setCapStyle(Qt.RoundCap)
+            painter.setPen(pen)
+            painter.drawLine(p1, p2)
 
-        # 路径点
+        # Draw waypoints
         for i, pt in enumerate(self._route_points):
             sp = self.world_to_screen(pt.x(), pt.y())
             r = 5
 
             if i == self._current_target_index:
-                # 当前目标 - 绿色
+                # Current target — green
                 painter.setBrush(QColor("#48bb78"))
                 painter.setPen(QPen(QColor("#ffffff"), 2))
                 r = 7
+            elif i in self._visited_indices or i < self._current_target_index:
+                # Visited — gray
+                painter.setBrush(QColor("#a0aec0"))
+                painter.setPen(QPen(QColor("#d1d5db"), 1))
             else:
+                # Upcoming — accent
                 painter.setBrush(QColor("#667eea"))
                 painter.setPen(QPen(QColor("#ffffff"), 1.5))
 
@@ -330,7 +371,7 @@ class MapCanvas(QWidget):
         self._icon_cache.clear()
         if not os.path.exists(icons_dir):
             return
-        
+
         for filename in os.listdir(icons_dir):
             if not filename.endswith('.png'):
                 continue
@@ -338,7 +379,22 @@ class MapCanvas(QWidget):
                 # filename format: "201_庇护所.png"
                 mt_id = int(filename.split('_')[0])
                 filepath = os.path.join(icons_dir, filename)
-                pixmap = QPixmap(filepath)
+
+                # Use PIL to load and strip ICC profile to avoid libpng warnings
+                try:
+                    from PIL import Image
+                    from io import BytesIO
+                    pil_img = Image.open(filepath)
+                    if 'icc_profile' in pil_img.info:
+                        pil_img.info.pop('icc_profile')
+                    buf = BytesIO()
+                    pil_img.save(buf, format='PNG')
+                    buf.seek(0)
+                    pixmap = QPixmap()
+                    pixmap.loadFromData(buf.read())
+                except ImportError:
+                    pixmap = QPixmap(filepath)
+
                 if not pixmap.isNull():
                     scaled = pixmap.scaled(
                         self._icon_size, self._icon_size,
@@ -347,7 +403,7 @@ class MapCanvas(QWidget):
                     self._icon_cache[mt_id] = scaled
             except (ValueError, Exception):
                 continue
-        
+
         logger.info("Loaded %d resource icons", len(self._icon_cache))
 
     def _draw_resources(self, painter: QPainter):
@@ -399,6 +455,12 @@ class MapCanvas(QWidget):
         self.update()
 
     def mousePressEvent(self, event: QMouseEvent):
+        if self._selecting_region and event.button() == Qt.LeftButton:
+            world = self.screen_to_world(event.pos().x(), event.pos().y())
+            self._sel_start = world
+            self._sel_current = world
+            self.update()
+            return
         if event.button() == Qt.LeftButton:
             self._dragging = True
             self._drag_start = QPointF(event.pos())
@@ -410,6 +472,11 @@ class MapCanvas(QWidget):
             self.position_clicked.emit(world.x(), world.y())
 
     def mouseMoveEvent(self, event: QMouseEvent):
+        if self._selecting_region and self._sel_start is not None:
+            world = self.screen_to_world(event.pos().x(), event.pos().y())
+            self._sel_current = world
+            self.update()
+            return
         if self._dragging:
             delta = QPointF(event.pos()) - self._drag_start
             self._offset_x = self._last_offset.x() + delta.x()
@@ -417,6 +484,22 @@ class MapCanvas(QWidget):
             self.update()
 
     def mouseReleaseEvent(self, event: QMouseEvent):
+        if self._selecting_region and event.button() == Qt.LeftButton and self._sel_start is not None:
+            world = self.screen_to_world(event.pos().x(), event.pos().y())
+            x1 = min(self._sel_start.x(), world.x())
+            y1 = min(self._sel_start.y(), world.y())
+            x2 = max(self._sel_start.x(), world.x())
+            y2 = max(self._sel_start.y(), world.y())
+            # Only emit if the region is meaningful (> 20px in both dimensions)
+            if (x2 - x1) > 20 and (y2 - y1) > 20:
+                self._selected_region = QRectF(x1, y1, x2 - x1, y2 - y1)
+                self.region_selected.emit(x1, y1, x2, y2)
+            self._selecting_region = False
+            self._sel_start = None
+            self._sel_current = None
+            self.setCursor(Qt.ArrowCursor)
+            self.update()
+            return
         if event.button() == Qt.LeftButton:
             self._dragging = False
             self.setCursor(Qt.ArrowCursor)
@@ -425,3 +508,40 @@ class MapCanvas(QWidget):
         super().resizeEvent(event)
         if self._map_image and self._zoom < self.MIN_ZOOM:
             self.fit_to_view()
+
+    def keyPressEvent(self, event):
+        if self._selecting_region and event.key() == Qt.Key_Escape:
+            self.cancel_region_selection()
+        else:
+            super().keyPressEvent(event)
+
+    def _draw_selection_rect(self, painter: QPainter):
+        """Draw the region selection rectangle (rubber band or confirmed)."""
+        # Active drag
+        if self._selecting_region and self._sel_start is not None and self._sel_current is not None:
+            p1 = self.world_to_screen(self._sel_start.x(), self._sel_start.y())
+            p2 = self.world_to_screen(self._sel_current.x(), self._sel_current.y())
+            rect = QRectF(p1, p2).normalized()
+            painter.save()
+            painter.setBrush(QColor(102, 126, 234, 30))  # semi-transparent blue
+            painter.setPen(QPen(QColor("#667eea"), 2, Qt.DashLine))
+            painter.drawRect(rect)
+            painter.restore()
+
+        # Confirmed region
+        if self._selected_region is not None:
+            p1 = self.world_to_screen(self._selected_region.x(), self._selected_region.y())
+            p2 = self.world_to_screen(
+                self._selected_region.x() + self._selected_region.width(),
+                self._selected_region.y() + self._selected_region.height()
+            )
+            rect = QRectF(p1, p2).normalized()
+            painter.save()
+            painter.setBrush(QColor(102, 126, 234, 20))
+            painter.setPen(QPen(QColor("#667eea"), 1.5, Qt.DashLine))
+            painter.drawRect(rect)
+            # Label
+            painter.setPen(QColor("#667eea"))
+            painter.setFont(QFont("Microsoft YaHei", 10))
+            painter.drawText(rect.adjusted(4, 2, 0, 0), Qt.AlignLeft | Qt.AlignTop, "规划区域")
+            painter.restore()

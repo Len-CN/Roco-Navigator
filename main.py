@@ -14,6 +14,15 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
+# IMPORTANT: Import torch before PyQt5 to avoid DLL conflicts
+# PyQt5 and PyTorch both use different versions of some DLLs (like c10.dll)
+# Importing torch first ensures its DLLs are loaded correctly
+try:
+    import torch
+    _TORCH_AVAILABLE = True
+except (ImportError, OSError):
+    _TORCH_AVAILABLE = False
+
 from roco_navigator.utils.logger import setup_logger
 from roco_navigator.utils.gpu_utils import GPUManager
 from roco_navigator.config.settings import Settings
@@ -34,9 +43,45 @@ def check_environment():
     try:
         import cv2
         logger.info(f"OpenCV 版本: {cv2.__version__}")
-    except ImportError:
-        logger.error("OpenCV 未安装! 请运行: pip install opencv-python")
-        return False
+        # 检测是否是 CUDA 版本
+        if hasattr(cv2, 'cuda') and cv2.cuda.getCudaEnabledDeviceCount() > 0:
+            logger.info("OpenCV 类型: opencv-contrib-python (CUDA 可用)")
+        else:
+            logger.info("OpenCV 类型: opencv-python (CPU)")
+    except ImportError as e:
+        # OpenCV CUDA 版本 DLL 加载失败，自动回退到 CPU 版本
+        if "DLL load failed" in str(e) or "找不到指定的模块" in str(e):
+            logger.warning("OpenCV CUDA 版本 DLL 加载失败，可能缺少 CUDA 运行时库")
+            logger.info("正在自动切换到 CPU 版本...")
+            
+            # 自动安装 CPU 版本
+            import subprocess
+            try:
+                result = subprocess.run(
+                    [sys.executable, "-m", "pip", "uninstall", "opencv-contrib-python", "-y"],
+                    capture_output=True,
+                    timeout=30
+                )
+                result = subprocess.run(
+                    [sys.executable, "-m", "pip", "install", "opencv-python"],
+                    capture_output=True,
+                    timeout=120
+                )
+                if result.returncode == 0:
+                    logger.info("已自动安装 CPU 版本，请重新启动程序")
+                    logger.info("如需使用 CUDA 版本，请先安装 CUDA Toolkit 12.x/13.x")
+                else:
+                    logger.error("自动安装 CPU 版本失败，请手动运行: install_opencv_cpu.bat")
+            except Exception as install_error:
+                logger.error(f"自动安装失败: {install_error}")
+                logger.error("请手动运行: install_opencv_cpu.bat")
+            return False
+        else:
+            logger.error(
+                "OpenCV 未安装! 请运行: pip install opencv-python\n"
+                "  或在程序设置→依赖选项卡中安装。"
+            )
+            return False
     
     try:
         import numpy as np
@@ -92,7 +137,7 @@ def main():
     from roco_navigator.ui.main_window import MainWindow
 
     app = QApplication(sys.argv)
-    app.setApplicationName("Roco Navigator")
+    app.setApplicationName("洛克导航")
     app.setApplicationVersion("0.1.0")
 
     # 创建并显示主窗口

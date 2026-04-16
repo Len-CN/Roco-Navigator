@@ -57,9 +57,14 @@ class WikiUpdater:
     TILE_Y_MIN = -5
     TILE_Y_MAX = 4
     
-    # Coordinate conversion: Leaflet CRS.Simple with resolution=2 at zoom 6
-    # point.lng -> pixel_x: px = (lng - origin_lng) / resolution
-    # point.lat -> pixel_y: py = (origin_lat_top - lat) / resolution
+    # Coordinate conversion: Leaflet CRS.Simple with custom transformation
+    # The WIKI uses L.Transformation(1/128, 0, 1/128, 0), meaning:
+    #   pixel_x = lng * 2^zoom / 128,  pixel_y = lat * 2^zoom / 128
+    # At zoom 6 (2^6=64): pixel = coord / 2
+    # Note: lat is NOT negated (unlike standard CRS.Simple), so lat increases downward
+    # Stitched image origin = tile (TILE_X_MIN, TILE_Y_MIN) at pixel (0, 0)
+    #   image_pixel_x = lng / 2 - TILE_X_MIN * 256
+    #   image_pixel_y = lat / 2 - TILE_Y_MIN * 256
     COORD_RESOLUTION = 2  # pixels per world unit at zoom 6
 
     def __init__(self):
@@ -99,12 +104,12 @@ class WikiUpdater:
             (success, message)
         """
         if self._update_in_progress:
-            return False, "Update already in progress"
+            return False, "更新正在进行中"
 
         self._update_in_progress = True
         try:
             if progress_callback:
-                progress_callback(0, f"Starting map download (zoom={zoom})...")
+                progress_callback(0, f"开始下载地图 (缩放={zoom})...")
 
             x_range = range(self.TILE_X_MIN, self.TILE_X_MAX + 1)
             y_range = range(self.TILE_Y_MIN, self.TILE_Y_MAX + 1)
@@ -136,19 +141,19 @@ class WikiUpdater:
                     count = yi * len(x_range) + xi + 1
                     if progress_callback:
                         pct = int(80 * count / total_tiles)
-                        progress_callback(pct, f"Downloading tiles... {count}/{total_tiles}")
+                        progress_callback(pct, f"下载瓦片中... {count}/{total_tiles}")
 
                     time.sleep(0.05)  # Rate limiting
 
             if not tiles or tile_size is None:
-                return False, f"No tiles downloaded (failed={failed})"
+                return False, f"未下载到瓦片 (失败={failed})"
 
             logger.info("Downloaded %d tiles (%d failed), tile_size=%s",
                         downloaded, failed, tile_size)
 
             # Stitch tiles into a single image
             if progress_callback:
-                progress_callback(85, "Stitching tiles...")
+                progress_callback(85, "拼接瓦片中...")
 
             tw, th = tile_size
             cols = len(x_range)
@@ -166,7 +171,7 @@ class WikiUpdater:
 
             # Save as PNG
             if progress_callback:
-                progress_callback(92, "Saving map image...")
+                progress_callback(92, "保存地图图片中...")
 
             map_filename = f"world_map_z{zoom}.png"
             map_path = os.path.join(self._maps_dir, map_filename)
@@ -175,16 +180,16 @@ class WikiUpdater:
             file_size_mb = os.path.getsize(map_path) / (1024 * 1024)
 
             if progress_callback:
-                progress_callback(100, "Map download complete!")
+                progress_callback(100, "地图下载完成！")
 
-            msg = (f"Map saved: {map_filename} ({full_width}x{full_height}, "
-                   f"{file_size_mb:.1f}MB, {downloaded} tiles)")
+            msg = (f"地图已保存: {map_filename} "
+                   f"({full_width}x{full_height}, {file_size_mb:.1f}MB, {downloaded} 张瓦片)")
             logger.info(msg)
             return True, msg
 
         except Exception as e:
             logger.error("Map download failed: %s", e)
-            return False, f"Map download failed: {str(e)}"
+            return False, f"地图下载失败: {str(e)}"
         finally:
             self._update_in_progress = False
 
@@ -207,21 +212,21 @@ class WikiUpdater:
             (success, message)
         """
         if self._update_in_progress:
-            return False, "Update already in progress"
+            return False, "更新正在进行中"
 
         self._update_in_progress = True
         try:
             # Step 1: Fetch main page for markType data
             if progress_callback:
-                progress_callback(5, "Fetching WIKI page...")
+                progress_callback(5, "获取 WIKI 页面中...")
 
             html = self._fetch_page(self.WIKI_MAP_URL)
             if html is None:
-                return False, "Failed to fetch WIKI page"
+                return False, "获取 WIKI 页面失败"
 
             # Step 2: Parse categoryData
             if progress_callback:
-                progress_callback(15, "Parsing mark types...")
+                progress_callback(15, "解析标记类型中...")
 
             mark_types = self._parse_category_data(html)
             if not mark_types:
@@ -230,19 +235,19 @@ class WikiUpdater:
 
             # Step 3: Fetch point coordinates
             if progress_callback:
-                progress_callback(30, "Fetching point data...")
+                progress_callback(30, "获取点位数据中...")
 
             points = self._fetch_point_data(html)
 
             # Step 4: Download icons
             if progress_callback:
-                progress_callback(45, "Downloading icons...")
+                progress_callback(45, "下载图标中...")
 
             icon_count = self._download_icons(mark_types, progress_callback)
 
             # Step 5: Save cache
             if progress_callback:
-                progress_callback(90, "Saving data...")
+                progress_callback(90, "保存数据中...")
 
             backup_file(self._cache_path)
 
@@ -258,16 +263,16 @@ class WikiUpdater:
             save_json(self._cache_path, cache_data)
 
             if progress_callback:
-                progress_callback(100, "Points update complete!")
+                progress_callback(100, "点位更新完成！")
 
-            msg = (f"Updated: {len(mark_types)} mark types, "
-                   f"{len(points)} points, {icon_count} icons")
+            msg = (f"已更新: {len(mark_types)} 种标记类型, "
+                   f"{len(points)} 个点位, {icon_count} 个图标")
             logger.info(msg)
             return True, msg
 
         except Exception as e:
             logger.error("Points update failed: %s", e)
-            return False, f"Update failed: {str(e)}"
+            return False, f"更新失败: {str(e)}"
         finally:
             self._update_in_progress = False
 
@@ -452,75 +457,6 @@ class WikiUpdater:
         except (ValueError, TypeError):
             return None
 
-    def _parse_points(self, data) -> List[Dict]:
-        """Parse point data from JSON structure.
-
-        The WIKI data is structured as:
-        { "201": [{"markType":201, "title":"", "id":"...", "point":{"lat":..., "lng":...}}, ...],
-          "302": [...], ... }
-
-        Keys are markType IDs, values are lists of point objects.
-        Coordinates are in point.lng (x) and point.lat (y).
-        """
-        points = []
-
-        if isinstance(data, dict):
-            # Check if this is a markType->pointList dict (keys are numeric strings)
-            # vs a wrapper dict with "data" or "points" key
-            has_list_values = any(isinstance(v, list) for v in data.values())
-            if has_list_values and not data.get("data") and not data.get("points"):
-                # Dict of markType ID -> list of points
-                for mark_type_id, point_list in data.items():
-                    if isinstance(point_list, list):
-                        for item in point_list:
-                            try:
-                                pt = item.get("point", {})
-                                point = {
-                                    "id": str(item.get("id", "")),
-                                    "name": item.get("title", ""),
-                                    "mark_type": int(item.get("markType", mark_type_id)),
-                                    "x": float(pt.get("lng", 0)),
-                                    "y": float(pt.get("lat", 0)),
-                                    "desc": item.get("desc", item.get("description", "")),
-                                }
-                                if point["id"]:
-                                    points.append(point)
-                            except (ValueError, TypeError):
-                                continue
-                return points
-            else:
-                # Legacy wrapper: { "data": [...] } or { "points": [...] }
-                items = data.get("data", data.get("points", []))
-        elif isinstance(data, list):
-            items = data
-        else:
-            return points
-
-        # Fallback: flat list of point items
-        for item in items:
-            try:
-                pt = item.get("point", {})
-                if pt:
-                    x = float(pt.get("lng", 0))
-                    y = float(pt.get("lat", 0))
-                else:
-                    x = float(item.get("x", item.get("lng", 0)))
-                    y = float(item.get("y", item.get("lat", 0)))
-                point = {
-                    "id": str(item.get("id", item.get("pointId", ""))),
-                    "name": item.get("title", item.get("name", "")),
-                    "mark_type": int(item.get("markType", item.get("mark_type", 0))),
-                    "x": x,
-                    "y": y,
-                    "desc": item.get("desc", item.get("description", "")),
-                }
-                if point["id"]:
-                    points.append(point)
-            except (ValueError, TypeError):
-                continue
-
-        return points
-
     # ==================== Internal: Icons ====================
 
     def _download_icons(self, mark_types: List[Dict],
@@ -569,58 +505,30 @@ class WikiUpdater:
         cache = self.get_cached_data()
         return cache.get("last_fetch") if cache else None
 
-    def check_needs_update(self, days: int = 7) -> bool:
-        last = self.get_last_update_time()
-        if not last:
-            return True
-        try:
-            age = (datetime.now() - datetime.fromisoformat(last)).days
-            return age >= days
-        except (ValueError, TypeError):
-            return True
-
     def get_map_path(self, zoom: int = 6) -> Optional[str]:
         """Get path to downloaded map image, if it exists."""
         path = os.path.join(self._maps_dir, f"world_map_z{zoom}.png")
         return path if os.path.exists(path) else None
 
-    def get_available_maps(self) -> List[str]:
-        """List available downloaded map files."""
-        if not os.path.exists(self._maps_dir):
-            return []
-        return [f for f in os.listdir(self._maps_dir)
-                if f.endswith(('.png', '.jpg'))]
-
     def world_to_pixel(self, lng: float, lat: float, zoom: int = 6) -> Tuple[float, float]:
         """
         Convert Leaflet world coordinates (lng, lat) to pixel coordinates
         in the stitched map image.
-        
-        Leaflet CRS.Simple with resolution=2 at zoom 6:
-        - Each tile covers 512 world units (256 pixels * 2 resolution)
-        - lng increases rightward (x), lat increases upward (y inverted for image)
+
+        The WIKI uses L.Transformation(1/128, 0, 1/128, 0) with CRS.Simple.
+        At zoom 6 (2^6=64): leaflet_pixel = coord * 64 / 128 = coord / 2.
+        lat is NOT negated (unlike standard CRS.Simple), so lat increases downward.
+
+        Image pixel = leaflet_pixel - tile_origin_pixel
+          pixel_x = lng / res - TILE_X_MIN * tile_size
+          pixel_y = lat / res - TILE_Y_MIN * tile_size
         """
         tile_size = 256
         res = self.COORD_RESOLUTION
-        
-        origin_lng = self.TILE_X_MIN * tile_size * res
-        origin_lat_top = -(self.TILE_Y_MIN * tile_size * res)
-        
-        pixel_x = (lng - origin_lng) / res
-        pixel_y = (origin_lat_top - lat) / res
+
+        pixel_x = lng / res - self.TILE_X_MIN * tile_size
+        pixel_y = lat / res - self.TILE_Y_MIN * tile_size
         return (pixel_x, pixel_y)
-    
-    def pixel_to_world(self, px: float, py: float, zoom: int = 6) -> Tuple[float, float]:
-        """Convert pixel coordinates back to Leaflet world coordinates."""
-        tile_size = 256
-        res = self.COORD_RESOLUTION
-        
-        origin_lng = self.TILE_X_MIN * tile_size * res
-        origin_lat_top = -(self.TILE_Y_MIN * tile_size * res)
-        
-        lng = px * res + origin_lng
-        lat = origin_lat_top - py * res
-        return (lng, lat)
 
     @property
     def is_updating(self) -> bool:

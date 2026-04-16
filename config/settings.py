@@ -39,11 +39,7 @@ class Settings:
             "theme": "neumorphism"
         },
         "performance": {
-            "max_fps": 30,
-            "image_scale": 1.0,
-            "use_gpu": False,
-            "gpu_device_id": 0,
-            "gpu_auto_fallback": True
+            "image_scale": 1.0
         },
         "data_update": {
             "wiki_url": "https://wiki.biligame.com/rocom/%E5%A4%A7%E5%9C%B0%E5%9B%BE",

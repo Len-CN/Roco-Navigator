@@ -10,6 +10,7 @@
 """
 
 import logging
+import math
 import time
 from typing import Optional, Tuple, Callable
 from enum import Enum
@@ -83,6 +84,7 @@ class PositionTracker:
         self._state = TrackingState.IDLE
         self._running = False
         self._position: Optional[Tuple[float, float]] = None
+        self._prev_position: Optional[Tuple[float, float]] = None
         self._direction: float = 0.0
         self._confidence: float = 0.0
         self._lost_frames: int = 0
@@ -130,6 +132,7 @@ class PositionTracker:
 
         self._running = True
         self._lost_frames = 0
+        self._prev_position = None
         self._change_state(TrackingState.GLOBAL_SCAN)
         self._last_time = time.perf_counter()
         logger.info("Tracking started")
@@ -185,6 +188,30 @@ class PositionTracker:
         """
         全局扫描: 滑动窗口遍历整个大地图
         """
+        # If precomputed features available, do a single global match
+        if self._detector._sift_matcher.is_precomputed:
+            minimap_gray = self._detector._image_processor.preprocess_minimap(
+                minimap, self._detector._use_clahe, self._detector._use_ring_mask,
+                self._detector._ring_outer, self._detector._ring_inner)
+            minimap_mask = None
+            if self._detector._use_ring_mask:
+                h, w = minimap_gray.shape[:2]
+                minimap_mask = self._detector._image_processor.create_ring_mask(
+                    min(h, w), self._detector._ring_outer, self._detector._ring_inner)
+            result = self._detector._sift_matcher.match_precomputed(
+                minimap_gray, search_center=None, minimap_mask=minimap_mask)
+            if result.success and result.confidence > 0.3:
+                self._position = result.position
+                self._confidence = result.confidence
+                self._lost_frames = 0
+                self._change_state(TrackingState.PRECISE_TRACK)
+                self._notify_position()
+                return self._build_status(
+                    f"Global scan found position via precomputed: "
+                    f"({result.position[0]:.0f}, {result.position[1]:.0f})"
+                )
+
+        # Fallback: original sliding window scan
         step = self._config.global_scan_step
         win_size = self._config.global_scan_size
         mw = self._map_manager.map_width
@@ -222,6 +249,88 @@ class PositionTracker:
         px, py = self._position
         radius = self._config.tracking_radius
 
+        # Use precomputed features with local search if available
+        if self._detector._sift_matcher.is_precomputed:
+            minimap_gray = self._detector._image_processor.preprocess_minimap(
+                minimap, self._detector._use_clahe, self._detector._use_ring_mask,
+                self._detector._ring_outer, self._detector._ring_inner)
+            minimap_mask = None
+            if self._detector._use_ring_mask:
+                h, w = minimap_gray.shape[:2]
+                minimap_mask = self._detector._image_processor.create_ring_mask(
+                    min(h, w), self._detector._ring_outer, self._detector._ring_inner)
+            result_sift = self._detector._sift_matcher.match_precomputed(
+                minimap_gray,
+                search_center=self._position,
+                search_radius=radius,
+                minimap_mask=minimap_mask)
+
+            if result_sift.success:
+                # 传送检测
+                if self._position and result_sift.position:
+                    dist = ((result_sift.position[0] - self._position[0]) ** 2 +
+                            (result_sift.position[1] - self._position[1]) ** 2) ** 0.5
+                    if dist > self._config.teleport_threshold:
+                        logger.warning("Teleport detected (%.0f px), re-scanning", dist)
+                        self._change_state(TrackingState.GLOBAL_SCAN)
+                        return self._build_status(f"Teleport detected ({dist:.0f} px)")
+
+                self._position = result_sift.position
+                self._confidence = result_sift.confidence
+                self._lost_frames = 0
+
+                # Compute direction from displacement
+                if self._prev_position is not None and result_sift.position is not None:
+                    dx = result_sift.position[0] - self._prev_position[0]
+                    dy = result_sift.position[1] - self._prev_position[1]
+                    dist_moved = (dx * dx + dy * dy) ** 0.5
+                    if dist_moved > 3.0:
+                        self._direction = (math.degrees(math.atan2(dx, -dy))) % 360
+                if result_sift.position is not None:
+                    self._prev_position = result_sift.position
+
+                self._notify_position()
+                return self._build_status(
+                    f"Tracking: ({self._position[0]:.0f}, {self._position[1]:.0f}) "
+                    f"conf={self._confidence:.2f}"
+                )
+            else:
+                # LoFTR fallback (if SIFT failed and AI is available)
+                if self._detector.should_use_ai_fallback:
+                    region = self._map_manager.get_logic_region(
+                        int(max(0, px - radius)), int(max(0, py - radius)),
+                        radius * 2, radius * 2
+                    )
+                    if region is not None:
+                        success, ai_result = self._detector.try_ai_match(
+                            minimap, region,
+                            (int(max(0, px - radius)), int(max(0, py - radius)))
+                        )
+                        if success:
+                            self._position = ai_result.position
+                            self._confidence = ai_result.confidence
+                            self._lost_frames = 0
+                            if self._prev_position is not None and ai_result.position is not None:
+                                dx = ai_result.position[0] - self._prev_position[0]
+                                dy = ai_result.position[1] - self._prev_position[1]
+                                dist_moved = (dx * dx + dy * dy) ** 0.5
+                                if dist_moved > 3.0:
+                                    self._direction = (math.degrees(math.atan2(dx, -dy))) % 360
+                            if ai_result.position is not None:
+                                self._prev_position = ai_result.position
+                            self._notify_position()
+                            return self._build_status(
+                                f"Tracking (LoFTR): ({self._position[0]:.0f}, {self._position[1]:.0f}) "
+                                f"conf={self._confidence:.2f}"
+                            )
+
+                self._lost_frames += 1
+                if self._lost_frames > self._config.max_lost_frames:
+                    self._change_state(TrackingState.INERTIA_NAV)
+                    return self._build_status("Too many lost frames, entering inertia mode")
+                return self._build_status(f"Lost frame {self._lost_frames}/{self._config.max_lost_frames}")
+
+        # Fallback: original region-based tracking
         x1 = int(max(0, px - radius))
         y1 = int(max(0, py - radius))
         w = radius * 2
@@ -247,6 +356,24 @@ class PositionTracker:
             self._position = result.position
             self._confidence = result.confidence
             self._lost_frames = 0
+
+            # Update direction from arrow detector (precise)
+            if result.direction != 0.0:
+                self._direction = result.direction
+
+            # Fallback: compute direction from displacement
+            if self._prev_position is not None and result.position is not None:
+                dx = result.position[0] - self._prev_position[0]
+                dy = result.position[1] - self._prev_position[1]
+                dist_moved = (dx * dx + dy * dy) ** 0.5
+                if dist_moved > 3.0 and result.direction == 0.0:
+                    # atan2 gives angle from positive X axis, convert to compass bearing
+                    # In pixel coords: x=right, y=down
+                    # 0=north(up), 90=east(right), 180=south(down), 270=west(left)
+                    self._direction = (math.degrees(math.atan2(dx, -dy))) % 360
+            if result.position is not None:
+                self._prev_position = result.position
+
             self._notify_position()
             return self._build_status(
                 f"Tracking: ({self._position[0]:.0f}, {self._position[1]:.0f}) "
@@ -347,3 +474,18 @@ class PositionTracker:
 
     def get_status(self) -> TrackingStatus:
         return self._build_status()
+
+    def precompute_map_features(self, map_gray) -> int:
+        """
+        Pre-compute SIFT features for the world map.
+
+        Delegates to MinimapDetector.precompute_map() which applies
+        CLAHE preprocessing before feature extraction.
+
+        Args:
+            map_gray: Grayscale world map image
+
+        Returns:
+            Number of features extracted
+        """
+        return self._detector.precompute_map(map_gray)

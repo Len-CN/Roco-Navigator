@@ -7,11 +7,10 @@
 
 import logging
 import numpy as np
-from typing import Optional, List, Tuple
+from typing import Optional, List
 from dataclasses import dataclass
 
 import mss
-import mss.tools
 
 logger = logging.getLogger(__name__)
 
