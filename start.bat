@@ -4,13 +4,16 @@ cd /d "%~dp0"
 title 洛克王国导航助手
 call :main
 echo.
-pause
+echo 按任意键退出...
+pause >nul
 exit /b
 
 :main
 echo ================================================
 echo            洛克王国导航助手 v1.0.0
 echo ================================================
+echo.
+echo 工作目录: %cd%
 echo.
 
 :: 检查 Python
@@ -52,5 +55,9 @@ if errorlevel 1 (
 :: 启动
 echo [*] 启动中...
 set PYTHONPATH=%~dp0..
-venv\Scripts\python.exe -m roco_navigator.main
+venv\Scripts\python.exe main.py
+if errorlevel 1 (
+    echo.
+    echo [错误] 程序异常退出
+)
 goto :eof
