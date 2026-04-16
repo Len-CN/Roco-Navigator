@@ -42,9 +42,9 @@ class SIFTMatcher:
                  n_features: int = 0,
                  contrast_threshold: float = 0.04,
                  edge_threshold: float = 10,
-                 ratio_threshold: float = 0.7,
-                 min_good_matches: int = 10,
-                 ransac_reproj_threshold: float = 5.0):
+                 ratio_threshold: float = 0.9,
+                 min_good_matches: int = 5,
+                 ransac_reproj_threshold: float = 8.0):
         """
         初始化 SIFT 匹配器
 

@@ -92,10 +92,10 @@ class MinimapDetector:
                  use_clahe: bool = True,
                  use_ring_mask: bool = True,
                  use_gpu: bool = False,
-                 sift_ratio: float = 0.7,
-                 min_matches: int = 10,
+                 sift_ratio: float = 0.9,
+                 min_matches: int = 5,
                  ring_outer: float = 0.95,
-                 ring_inner: float = 0.0):
+                 ring_inner: float = 0.15):
         """
         初始化小地图检测器
 
@@ -412,7 +412,7 @@ class MinimapDetector:
         dy = position[1] - last[1]
         distance = (dx ** 2 + dy ** 2) ** 0.5
 
-        max_speed = 150  # 最大合理移动距离 (像素/帧)
+        max_speed = 500  # 最大合理移动距离 (像素/帧)
         if distance > max_speed:
             logger.warning(
                 "Position jump detected: %.1f pixels (max=%d)",

@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 class PackageManager:
     """包管理器"""
     
-    # 包配置（仅 CPU 版本）
+    # 包配置（CUDA 版本）
     PACKAGES = {
         "opencv": {
             "name": "opencv-python",
@@ -33,11 +33,11 @@ class PackageManager:
         },
         "torch": {
             "name": "torch",
-            "display_name": "PyTorch",
-            "size_mb": 200,
+            "display_name": "PyTorch (CUDA)",
+            "size_mb": 2500,
             "required": False,
             "install_method": "pip",
-            "index_url": "https://download.pytorch.org/whl/cpu"
+            "index_url": "https://download.pytorch.org/whl/cu121"
         },
         "kornia": {
             "name": "kornia",

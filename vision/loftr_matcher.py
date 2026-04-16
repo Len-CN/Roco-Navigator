@@ -70,8 +70,8 @@ class LoFTRMatcher:
 
     def __init__(self,
                  pretrained: str = "outdoor",
-                 confidence_threshold: float = 0.5,
-                 min_matches: int = 6,
+                 confidence_threshold: float = 0.55,
+                 min_matches: int = 9,
                  ransac_threshold: float = 8.0,
                  device: Optional[str] = None):
         """
@@ -98,8 +98,20 @@ class LoFTRMatcher:
         self._ransac_threshold = ransac_threshold
 
         # Auto-detect device
+        cuda_available = torch.cuda.is_available()
+        logger.info("CUDA available: %s", cuda_available)
         if device is None:
-            self._device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            if cuda_available:
+                self._device = torch.device("cuda")
+                logger.info("LoFTR using CUDA GPU acceleration")
+            else:
+                self._device = torch.device("cpu")
+                logger.warning(
+                    "CUDA not available, LoFTR falling back to CPU. "
+                    "Performance will be significantly slower. "
+                    "Install CUDA-enabled PyTorch for GPU acceleration: "
+                    "pip install torch --index-url https://download.pytorch.org/whl/cu121"
+                )
         else:
             self._device = torch.device(device)
 
@@ -108,8 +120,8 @@ class LoFTRMatcher:
         self._model = self._model.to(self._device)
         self._model.eval()
 
-        logger.info("LoFTR initialized (device=%s, pretrained=%s)",
-                     self._device, pretrained)
+        logger.info("LoFTR initialized (device=%s, pretrained=%s, cuda_available=%s)",
+                     self._device, pretrained, cuda_available)
 
     def _preprocess(self, image: np.ndarray):
         """Convert image to LoFTR input format.
@@ -124,14 +136,13 @@ class LoFTRMatcher:
         else:
             gray = image
 
-        # Pad to dimensions divisible by 8
+        # Resize to dimensions divisible by 8 (avoid zero-padding which creates
+        # black borders that produce spurious matches)
         h, w = gray.shape
         new_h = ((h + 7) // 8) * 8
         new_w = ((w + 7) // 8) * 8
         if new_h != h or new_w != w:
-            padded = np.zeros((new_h, new_w), dtype=np.uint8)
-            padded[:h, :w] = gray
-            gray = padded
+            gray = cv2.resize(gray, (new_w, new_h))
 
         # Convert to tensor
         tensor = torch.from_numpy(gray).float() / 255.0

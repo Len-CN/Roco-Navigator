@@ -89,6 +89,10 @@ class PositionTracker:
         self._confidence: float = 0.0
         self._lost_frames: int = 0
 
+        # EMA 位置平滑
+        self._smoothed_x: Optional[float] = None
+        self._smoothed_y: Optional[float] = None
+
         # 小地图区域配置
         self._minimap_region: Optional[dict] = None  # {"x", "y", "width", "height"}
 
@@ -140,12 +144,58 @@ class PositionTracker:
     def stop(self):
         """停止追踪"""
         self._running = False
+        self._smoothed_x = None
+        self._smoothed_y = None
         self._change_state(TrackingState.IDLE)
         logger.info("Tracking stopped")
 
     @property
     def is_running(self) -> bool:
         return self._running
+
+    # ==================== EMA 位置平滑 ====================
+
+    def _smooth_position(self, raw_x: float, raw_y: float) -> Tuple[float, float]:
+        """
+        自适应 EMA 位置平滑（参考 Game-Map-Tracker）
+
+        - 首次定位：直接赋值，不平滑
+        - dist > 500px：跳变/传送，直接接受不平滑
+        - dist < 15px：alpha=0.15（慢平滑，减少抖动）
+        - dist >= 15px：alpha=0.45（快跟随，跟上移动）
+
+        Args:
+            raw_x: 原始 X 坐标
+            raw_y: 原始 Y 坐标
+
+        Returns:
+            平滑后的 (x, y) 坐标
+        """
+        if self._smoothed_x is None or self._smoothed_y is None:
+            # 首次定位，直接赋值
+            self._smoothed_x = raw_x
+            self._smoothed_y = raw_y
+            return (raw_x, raw_y)
+
+        dx = raw_x - self._smoothed_x
+        dy = raw_y - self._smoothed_y
+        dist = (dx * dx + dy * dy) ** 0.5
+
+        if dist > 500:
+            # 跳变/传送，直接接受不平滑
+            self._smoothed_x = raw_x
+            self._smoothed_y = raw_y
+            return (raw_x, raw_y)
+
+        if dist < 15:
+            alpha = 0.15  # 慢平滑，减少抖动
+        else:
+            alpha = 0.45  # 快跟随，跟上移动
+
+        self._smoothed_x = alpha * raw_x + (1 - alpha) * self._smoothed_x
+        self._smoothed_y = alpha * raw_y + (1 - alpha) * self._smoothed_y
+
+        return (self._smoothed_x, self._smoothed_y)
 
     # ==================== 核心追踪循环 ====================
 
@@ -202,6 +252,10 @@ class PositionTracker:
                 minimap_gray, search_center=None, minimap_mask=minimap_mask)
             if result.success and result.confidence > 0.3:
                 self._position = result.position
+                # 首次定位：初始化 EMA 但不平滑
+                if result.position is not None:
+                    self._smoothed_x = result.position[0]
+                    self._smoothed_y = result.position[1]
                 self._confidence = result.confidence
                 self._lost_frames = 0
                 self._change_state(TrackingState.PRECISE_TRACK)
@@ -227,6 +281,10 @@ class PositionTracker:
 
                 if result.success and result.confidence > 0.3:
                     self._position = result.position
+                    # 首次定位：初始化 EMA 但不平滑
+                    if result.position is not None:
+                        self._smoothed_x = result.position[0]
+                        self._smoothed_y = result.position[1]
                     self._confidence = result.confidence
                     self._lost_frames = 0
                     self._change_state(TrackingState.PRECISE_TRACK)
@@ -275,7 +333,12 @@ class PositionTracker:
                         self._change_state(TrackingState.GLOBAL_SCAN)
                         return self._build_status(f"Teleport detected ({dist:.0f} px)")
 
-                self._position = result_sift.position
+                # EMA 平滑后赋值
+                if result_sift.position is not None:
+                    smoothed = self._smooth_position(result_sift.position[0], result_sift.position[1])
+                    self._position = smoothed
+                else:
+                    self._position = result_sift.position
                 self._confidence = result_sift.confidence
                 self._lost_frames = 0
 
@@ -307,7 +370,12 @@ class PositionTracker:
                             (int(max(0, px - radius)), int(max(0, py - radius)))
                         )
                         if success:
-                            self._position = ai_result.position
+                            # EMA 平滑后赋值
+                            if ai_result.position is not None:
+                                smoothed = self._smooth_position(ai_result.position[0], ai_result.position[1])
+                                self._position = smoothed
+                            else:
+                                self._position = ai_result.position
                             self._confidence = ai_result.confidence
                             self._lost_frames = 0
                             if self._prev_position is not None and ai_result.position is not None:
@@ -353,7 +421,12 @@ class PositionTracker:
                     self._change_state(TrackingState.GLOBAL_SCAN)
                     return self._build_status(f"Teleport detected ({dist:.0f} px)")
 
-            self._position = result.position
+            # EMA 平滑后赋值
+            if result.position is not None:
+                smoothed = self._smooth_position(result.position[0], result.position[1])
+                self._position = smoothed
+            else:
+                self._position = result.position
             self._confidence = result.confidence
             self._lost_frames = 0
 

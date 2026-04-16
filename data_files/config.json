@@ -1,19 +1,19 @@
 {
   "minimap": {
     "region": {
-      "x": 1721,
-      "y": 44,
+      "x": 1720,
+      "y": 45,
       "width": 170,
       "height": 170
     },
     "calibrated": true
   },
   "tracking": {
-    "update_interval": 100,
+    "update_interval": 50,
     "position_threshold": 5,
     "teleport_threshold": 100,
     "max_history": 10,
-    "detection_mode": "ai"
+    "detection_mode": "sift"
   },
   "ui": {
     "overlay_enabled": false,
@@ -49,8 +49,8 @@
     "use_sift": true,
     "use_clahe": true,
     "use_ring_mask": true,
-    "sift_ratio_threshold": 0.7,
-    "min_good_matches": 10,
+    "sift_ratio_threshold": 0.9,
+    "min_good_matches": 5,
     "fallback_to_color": true,
     "check_minimap_visible": true
   },

@@ -139,13 +139,13 @@ class SettingsDialog(QDialog):
         self._sift_ratio = QDoubleSpinBox()
         self._sift_ratio.setRange(0.3, 0.95)
         self._sift_ratio.setSingleStep(0.05)
-        self._sift_ratio.setValue(self._settings.get("minimap_detection.sift_ratio_threshold", 0.7))
+        self._sift_ratio.setValue(self._settings.get("minimap_detection.sift_ratio_threshold", 0.9))
         layout.addLayout(self._create_row("SIFT 比率阈值", self._sift_ratio))
 
         # Min matches
         self._min_matches = QSpinBox()
         self._min_matches.setRange(3, 50)
-        self._min_matches.setValue(self._settings.get("minimap_detection.min_good_matches", 10))
+        self._min_matches.setValue(self._settings.get("minimap_detection.min_good_matches", 5))
         layout.addLayout(self._create_row("最小匹配点数", self._min_matches))
 
         # Use CLAHE

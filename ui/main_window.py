@@ -207,8 +207,9 @@ class MainWindow(QMainWindow):
             use_clahe=settings.get("minimap_detection.use_clahe", True),
             use_ring_mask=settings.get("minimap_detection.use_ring_mask", True),
             use_gpu=use_gpu,
-            sift_ratio=settings.get("minimap_detection.sift_ratio_threshold", 0.7),
-            min_matches=settings.get("minimap_detection.min_good_matches", 10),
+            sift_ratio=settings.get("minimap_detection.sift_ratio_threshold", 0.9),
+            min_matches=settings.get("minimap_detection.min_good_matches", 5),
+            ring_inner=0.15,
         )
         self._tracker = PositionTracker(
             self._screen_capture,

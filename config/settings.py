@@ -51,8 +51,8 @@ class Settings:
             "use_sift": True,             # 使用 SIFT 特征匹配
             "use_clahe": True,            # 使用 CLAHE 增强
             "use_ring_mask": True,        # 使用圆环遮罩
-            "sift_ratio_threshold": 0.7,  # SIFT 比率测试阈值
-            "min_good_matches": 10,       # 最小匹配点数
+            "sift_ratio_threshold": 0.9,  # SIFT 比率测试阈值
+            "min_good_matches": 5,        # 最小匹配点数
             "fallback_to_color": True,    # 降级到颜色检测
             "check_minimap_visible": True # 检查小地图可见性
         },
