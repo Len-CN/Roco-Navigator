@@ -3,28 +3,25 @@ chcp 65001 >nul 2>&1
 setlocal enabledelayedexpansion
 cd /d "%~dp0"
 
-:: ================================================
-::            洛克王国导航助手 v1.0.0
-:: ================================================
+title 洛克王国导航助手
+
+echo ================================================
+echo            洛克王国导航助手 v1.0.0
+echo ================================================
+echo.
 
 :: 检查 Python
-where python >nul 2>&1
+python --version >nul 2>&1
 if errorlevel 1 (
     echo [错误] 未检测到 Python，请安装 Python 3.10+ 并添加到 PATH
-    echo        下载地址: https://www.python.org/downloads/
+    echo        下载: https://www.python.org/downloads/
+    echo.
     pause
     exit /b 1
 )
 
-:: 检查 Python 版本
-for /f "tokens=2 delims= " %%v in ('python --version 2^>^&1') do set PYVER=%%v
-echo [信息] Python 版本: %PYVER%
-
-:: 创建虚拟环境 (首次运行)
+:: 首次运行: 创建环境 + 安装依赖
 if not exist "venv\Scripts\python.exe" (
-    echo.
-    echo [*] 首次运行，正在配置环境...
-    echo.
     echo [1/2] 创建虚拟环境...
     python -m venv venv
     if errorlevel 1 (
@@ -32,7 +29,7 @@ if not exist "venv\Scripts\python.exe" (
         pause
         exit /b 1
     )
-    echo [2/2] 安装依赖 (可能需要几分钟)...
+    echo [2/2] 安装依赖 (首次需要几分钟)...
     venv\Scripts\pip.exe install -r requirements.txt
     if errorlevel 1 (
         echo [错误] 安装依赖失败
@@ -44,32 +41,25 @@ if not exist "venv\Scripts\python.exe" (
     echo.
 )
 
-:: 检查 OpenCV (DLL加载失败时自动切换CPU版本)
+:: 检查 OpenCV
 venv\Scripts\python.exe -c "import cv2" >nul 2>&1
 if errorlevel 1 (
-    echo [*] OpenCV 加载失败，正在切换到 CPU 版本...
+    echo [*] OpenCV 异常，正在修复...
     venv\Scripts\pip.exe uninstall opencv-contrib-python -y >nul 2>&1
     venv\Scripts\pip.exe install opencv-python>=4.8.0
-    if errorlevel 1 (
-        echo [错误] OpenCV 安装失败
-        pause
-        exit /b 1
-    )
-    echo [OK] OpenCV CPU 版本已安装
 )
 
-:: 启动
-title 洛克王国导航助手
-echo ================================================
-echo            洛克王国导航助手 v1.0.0
-echo ================================================
+:: 启动程序
+echo [*] 启动中...
 echo.
-
 set PYTHONPATH=%~dp0..
 venv\Scripts\python.exe -m roco_navigator.main
 
+:: 无论正常退出还是异常，都暂停让用户看到输出
+echo.
 if errorlevel 1 (
-    echo.
     echo [错误] 程序异常退出 (代码: !errorlevel!)
-    pause
+) else (
+    echo [信息] 程序已退出
 )
+pause
