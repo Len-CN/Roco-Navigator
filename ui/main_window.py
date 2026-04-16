@@ -236,7 +236,7 @@ class MainWindow(QMainWindow):
         hud_size = settings.get("ui.overlay_size", {"width": 320, "height": 400})
         hud_shape = settings.get("ui.hud_shape", "rounded_rect")
         self._overlay_hud = OverlayHUD(
-            size="medium",
+            size="中",
             custom_w=hud_size.get("width", 0),
             custom_h=hud_size.get("height", 0),
             shape=hud_shape,

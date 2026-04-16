@@ -52,15 +52,15 @@ class OverlayHUD(QWidget):
 
     # 尺寸预设
     SIZES = {
-        "small": (240, 310),
-        "medium": (320, 400),
-        "large": (400, 500),
+        "小": (240, 310),
+        "中": (320, 400),
+        "大": (400, 500),
     }
 
     # 边缘拖拽检测区域 (px)
     RESIZE_EDGE = 8
 
-    def __init__(self, parent=None, size: str = "medium",
+    def __init__(self, parent=None, size: str = "中",
                  custom_w: int = 0, custom_h: int = 0,
                  shape: str = "rounded_rect"):
         super().__init__(parent)
@@ -78,7 +78,7 @@ class OverlayHUD(QWidget):
         if custom_w > 0 and custom_h > 0:
             w, h = custom_w, custom_h
         else:
-            w, h = self.SIZES.get(size, self.SIZES["medium"])
+            w, h = self.SIZES.get(size, self.SIZES["中"])
 
         self.setMinimumSize(180, 200)
         self.setMaximumSize(800, 800)
@@ -91,8 +91,8 @@ class OverlayHUD(QWidget):
         self._map_rect = QRect()
         self._info_rect = QRect()
 
-        # 形状: "rounded_rect", "rect", "circle"
-        self._shape = shape
+        # 形状: "rounded_rect", "circle"
+        self._shape = shape if shape in ("rounded_rect", "circle") else "rounded_rect"
 
         # 数据
         self._map_crop: Optional[np.ndarray] = None
@@ -222,17 +222,16 @@ class OverlayHUD(QWidget):
         # 2.5. 资源点
         self._draw_resource_points(painter)
 
-        # 3. 信息区域
-        self._draw_info_area(painter)
+        # 3. 信息区域 (圆形模式无信息栏)
+        if self._shape != "circle":
+            self._draw_info_area(painter)
 
     def _draw_background(self, painter: QPainter):
-        """绘制新拟物派背景 (按形状绘制)"""
+        """绘制新拟物派背景"""
         path = QPainterPath()
         if self._shape == "circle":
             path.addEllipse(QRectF(self.rect()))
-        elif self._shape == "rect":
-            path.addRect(QRectF(self.rect()))
-        else:  # rounded_rect (default)
+        else:  # rounded_rect
             path.addRoundedRect(QRectF(self.rect()), 16, 16)
 
         # 主背景色
@@ -251,9 +250,12 @@ class OverlayHUD(QWidget):
         """绘制地图区域"""
         painter.save()
 
-        # 内凹容器
+        # 内凹容器 (圆形模式用圆形裁剪)
         map_path = QPainterPath()
-        map_path.addRoundedRect(QRectF(self._map_rect), 12, 12)
+        if self._shape == "circle":
+            map_path.addEllipse(QRectF(self._map_rect))
+        else:
+            map_path.addRoundedRect(QRectF(self._map_rect), 12, 12)
         painter.setClipPath(map_path)
 
         # 容器背景
@@ -408,7 +410,10 @@ class OverlayHUD(QWidget):
         painter.restore()
 
     def _draw_compass(self, painter: QPainter):
-        """绘制目标方向指示器 (右上角)"""
+        """绘制目标方向指示器 (右上角) — 仅在有目标时显示"""
+        if not self._target_rel_pos:
+            return  # 无目标时不显示
+
         painter.save()
 
         cx = self._map_rect.right() - 25
@@ -422,24 +427,17 @@ class OverlayHUD(QWidget):
         painter.drawEllipse(QPointF(0, 0), 20, 20)
         painter.setOpacity(self._opacity)
 
-        if self._target_rel_pos:
-            # 指向目标
-            painter.rotate(self._direction_to_target)
-
-            arrow = QPainterPath()
-            arrow.moveTo(0, -15)
-            arrow.lineTo(-5, 5)
-            arrow.lineTo(0, 1)
-            arrow.lineTo(5, 5)
-            arrow.closeSubpath()
-            painter.setBrush(QColor(SUCCESS))
-            painter.setPen(Qt.NoPen)
-            painter.drawPath(arrow)
-        else:
-            # 无目标时显示 N 标记
-            painter.setPen(QColor(TEXT_SECONDARY))
-            painter.setFont(QFont("Microsoft YaHei", 10, QFont.Bold))
-            painter.drawText(-5, 5, "北")
+        # 指向目标的箭头
+        painter.rotate(self._direction_to_target)
+        arrow = QPainterPath()
+        arrow.moveTo(0, -15)
+        arrow.lineTo(-5, 5)
+        arrow.lineTo(0, 1)
+        arrow.lineTo(5, 5)
+        arrow.closeSubpath()
+        painter.setBrush(QColor(SUCCESS))
+        painter.setPen(Qt.NoPen)
+        painter.drawPath(arrow)
 
         painter.restore()
 
@@ -533,22 +531,33 @@ class OverlayHUD(QWidget):
     def _update_layout(self):
         """根据当前窗口尺寸重算内部布局"""
         w, h = self.width(), self.height()
-        self._map_size = min(w - self._padding * 2,
-                             h - self._info_height - self._padding * 2 - 8)
-        self._map_size = max(50, self._map_size)
-        self._map_rect = QRect(
-            self._padding, self._padding,
-            self._map_size, self._map_size
-        )
-        self._info_rect = QRect(
-            self._padding, self._padding + self._map_size + 8,
-            w - self._padding * 2, self._info_height
-        )
-        self._bg_cache = None
+
         if self._shape == "circle":
+            # 圆形模式: 纯地图，无信息栏
+            side = min(w, h)
+            self._map_size = side - self._padding * 2
+            self._map_size = max(50, self._map_size)
+            offset_x = (w - self._map_size) // 2
+            offset_y = (h - self._map_size) // 2
+            self._map_rect = QRect(offset_x, offset_y, self._map_size, self._map_size)
+            self._info_rect = QRect()  # 无信息栏
             self.setMask(QRegion(self.rect(), QRegion.Ellipse))
         else:
+            # 圆角矩形: 完整 UI (地图 + 信息栏)
+            self._map_size = min(w - self._padding * 2,
+                                 h - self._info_height - self._padding * 2 - 8)
+            self._map_size = max(50, self._map_size)
+            self._map_rect = QRect(
+                self._padding, self._padding,
+                self._map_size, self._map_size
+            )
+            self._info_rect = QRect(
+                self._padding, self._padding + self._map_size + 8,
+                w - self._padding * 2, self._info_height
+            )
             self.clearMask()
+
+        self._bg_cache = None
         self.update()
 
     def resizeEvent(self, event):
@@ -558,8 +567,8 @@ class OverlayHUD(QWidget):
     # ==================== 形状 ====================
 
     def set_shape(self, shape: str):
-        """Set HUD shape: rounded_rect, rect, circle"""
-        if shape not in ("rounded_rect", "rect", "circle"):
+        """设置形状: rounded_rect(完整UI), circle(纯地图)"""
+        if shape not in ("rounded_rect", "circle"):
             shape = "rounded_rect"
         self._shape = shape
         self._update_layout()
@@ -696,9 +705,8 @@ class OverlayHUD(QWidget):
         # 形状子菜单
         shape_menu = menu.addMenu("形状")
         shapes = [
-            ("圆角矩形", "rounded_rect"),
-            ("矩形", "rect"),
-            ("圆形", "circle"),
+            ("圆角矩形 (完整)", "rounded_rect"),
+            ("圆形 (纯地图)", "circle"),
         ]
         for label, shape_key in shapes:
             a = shape_menu.addAction(label)
@@ -717,7 +725,6 @@ class OverlayHUD(QWidget):
             a = zoom_menu.addAction(name)
             a.triggered.connect(lambda checked, v=crop_val: self._set_crop_size(v))
 
-        # Custom zoom input
         custom_zoom = zoom_menu.addAction("自定义...")
         custom_zoom.triggered.connect(self._on_custom_zoom)
 
@@ -729,7 +736,7 @@ class OverlayHUD(QWidget):
         menu.exec_(pos)
 
     def _resize_to(self, size_name: str):
-        w, h = self.SIZES.get(size_name, self.SIZES["medium"])
+        w, h = self.SIZES.get(size_name, self.SIZES["中"])
         self.resize(w, h)
         self.size_changed.emit(w, h)
 
