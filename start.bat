@@ -1,5 +1,5 @@
-﻿@echo off
-chcp 65001 >nul 2>&1
+@chcp 65001 >nul 2>&1
+@echo off
 cd /d "%~dp0"
 title 洛克王国导航助手
 call :main
