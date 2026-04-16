@@ -547,14 +547,17 @@ class OverlayHUD(QWidget):
         w, h = self.width(), self.height()
 
         if self._shape == "circle":
-            # 圆形模式: 纯地图，无信息栏
+            # 圆形模式: 强制正方形 + 纯地图
             side = min(w, h)
+            if w != side or h != side:
+                self.resize(side, side)
+                return  # resize 会再次触发 _update_layout
             self._map_size = side - self._padding * 2
             self._map_size = max(50, self._map_size)
             offset_x = (w - self._map_size) // 2
             offset_y = (h - self._map_size) // 2
             self._map_rect = QRect(offset_x, offset_y, self._map_size, self._map_size)
-            self._info_rect = QRect()  # 无信息栏
+            self._info_rect = QRect()
             self.setMask(QRegion(self.rect(), QRegion.Ellipse))
         else:
             # 圆角矩形: 完整 UI (地图 + 信息栏)
@@ -644,6 +647,10 @@ class OverlayHUD(QWidget):
                 new_w = max(180, min(800, self._resize_start_w + delta.x()))
             if self._resize_edge in ("bottom", "corner"):
                 new_h = max(200, min(800, self._resize_start_h + delta.y()))
+            # 圆形模式强制正方形
+            if self._shape == "circle":
+                side = max(new_w, new_h)
+                new_w = new_h = side
             self.resize(new_w, new_h)
             return
 
