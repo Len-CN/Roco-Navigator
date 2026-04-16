@@ -1,4 +1,5 @@
-@echo off
+﻿@echo off
+chcp 65001 >nul 2>&1
 setlocal
 cd /d "%~dp0"
 
@@ -22,8 +23,7 @@ if not exist "venv\Scripts\python.exe" (
     echo.
 )
 
-:: Launch with dependency checker
-chcp 65001 >nul 2>&1
+:: Launch
 title 洛克导航
 echo ============================================
 echo   洛克导航
