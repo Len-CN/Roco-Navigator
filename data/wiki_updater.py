@@ -13,13 +13,10 @@ import os
 import re
 import json
 import time
-import math
 from typing import Optional, Dict, List, Callable, Tuple
 from datetime import datetime
 from io import BytesIO
 
-import cv2
-import numpy as np
 import requests
 from bs4 import BeautifulSoup
 from PIL import Image
@@ -51,21 +48,22 @@ class WikiUpdater:
         "Chrome/120.0.0.0 Safari/537.36"
     )
 
-    # Tile ranges at zoom 6 (probed from actual WIKI data)
-    TILE_X_MIN = -6
-    TILE_X_MAX = 5
-    TILE_Y_MIN = -5
-    TILE_Y_MAX = 4
-    
-    # Coordinate conversion: Leaflet CRS.Simple with custom transformation
-    # The WIKI uses L.Transformation(1/128, 0, 1/128, 0), meaning:
-    #   pixel_x = lng * 2^zoom / 128,  pixel_y = lat * 2^zoom / 128
-    # At zoom 6 (2^6=64): pixel = coord / 2
-    # Note: lat is NOT negated (unlike standard CRS.Simple), so lat increases downward
+    # Tile ranges at zoom 7 (参考 Game-Map-Tracker: zoom 7 提供 2x 分辨率)
+    # zoom 6: X[-6,5], Y[-5,4] → 3072x2560
+    # zoom 7: X[-12,11], Y[-10,9] → 6144x5120 (每维 2x)
+    TILE_X_MIN = -12
+    TILE_X_MAX = 11
+    TILE_Y_MIN = -10
+    TILE_Y_MAX = 9
+
+    # Coordinate conversion: Leaflet CRS.Simple with L.Transformation(1/128, 0, 1/128, 0)
+    #   pixel = coord * 2^zoom / 128
+    # At zoom 7 (2^7=128): pixel = coord * 128 / 128 = coord * 1
+    # lat is NOT negated (unlike standard CRS.Simple), lat increases downward
     # Stitched image origin = tile (TILE_X_MIN, TILE_Y_MIN) at pixel (0, 0)
-    #   image_pixel_x = lng / 2 - TILE_X_MIN * 256
-    #   image_pixel_y = lat / 2 - TILE_Y_MIN * 256
-    COORD_RESOLUTION = 2  # pixels per world unit at zoom 6
+    #   image_pixel_x = lng - TILE_X_MIN * 256 = lng + 3072
+    #   image_pixel_y = lat - TILE_Y_MIN * 256 = lat + 2560
+    COORD_RESOLUTION = 1  # pixels per world unit at zoom 7
 
     def __init__(self):
         self._session = requests.Session()
@@ -86,7 +84,7 @@ class WikiUpdater:
 
     # ==================== Map Download ====================
 
-    def download_map(self, zoom: int = 6,
+    def download_map(self, zoom: int = 7,
                      progress_callback: Optional[Callable] = None
                      ) -> Tuple[bool, str]:
         """
@@ -505,22 +503,22 @@ class WikiUpdater:
         cache = self.get_cached_data()
         return cache.get("last_fetch") if cache else None
 
-    def get_map_path(self, zoom: int = 6) -> Optional[str]:
+    def get_map_path(self, zoom: int = 7) -> Optional[str]:
         """Get path to downloaded map image, if it exists."""
         path = os.path.join(self._maps_dir, f"world_map_z{zoom}.png")
         return path if os.path.exists(path) else None
 
-    def world_to_pixel(self, lng: float, lat: float, zoom: int = 6) -> Tuple[float, float]:
+    def world_to_pixel(self, lng: float, lat: float, zoom: int = 7) -> Tuple[float, float]:
         """
         Convert Leaflet world coordinates (lng, lat) to pixel coordinates
         in the stitched map image.
 
         The WIKI uses L.Transformation(1/128, 0, 1/128, 0) with CRS.Simple.
-        At zoom 6 (2^6=64): leaflet_pixel = coord * 64 / 128 = coord / 2.
+        At zoom 7 (2^7=128): leaflet_pixel = coord * 128 / 128 = coord.
         lat is NOT negated (unlike standard CRS.Simple), so lat increases downward.
 
         Image pixel = leaflet_pixel - tile_origin_pixel
-          pixel_x = lng / res - TILE_X_MIN * tile_size
+          pixel_x = lng / res - TILE_X_MIN * tile_size  (res=1 at z7)
           pixel_y = lat / res - TILE_Y_MIN * tile_size
         """
         tile_size = 256

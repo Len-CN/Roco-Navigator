@@ -19,9 +19,9 @@ class ImageProcessor:
     def __init__(self, use_gpu: bool = False):
         self._use_gpu = use_gpu
 
-        # CLAHE 增强器
+        # CLAHE 增强器 (clipLimit=4.0 参考 Game-Map-Tracker Hybrid 引擎)
         self._clahe = cv2.createCLAHE(
-            clipLimit=3.0,
+            clipLimit=4.0,
             tileGridSize=(8, 8)
         )
 
@@ -32,7 +32,7 @@ class ImageProcessor:
 
     # ==================== CLAHE 增强 ====================
 
-    def apply_clahe(self, image: np.ndarray, clip_limit: float = 3.0,
+    def apply_clahe(self, image: np.ndarray, clip_limit: float = 4.0,
                     tile_size: Tuple[int, int] = (8, 8)) -> np.ndarray:
         """
         使用 CLAHE 增强图像对比度
@@ -49,7 +49,7 @@ class ImageProcessor:
             增强后的灰度图像
         """
         # 如果参数不同于默认，创建新的 CLAHE 实例
-        if clip_limit != 3.0 or tile_size != (8, 8):
+        if clip_limit != 4.0 or tile_size != (8, 8):
             clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=tile_size)
         else:
             clahe = self._clahe
@@ -174,10 +174,8 @@ class ImageProcessor:
         Returns:
             预处理后的灰度图像
         """
-        result = minimap.copy()
-
-        # Step 1: 灰度
-        result = self.to_grayscale(result)
+        # Step 1: 灰度 (cvtColor 返回新数组，无需 copy 原图)
+        result = self.to_grayscale(minimap)
 
         # Step 2: CLAHE 增强
         if use_clahe:

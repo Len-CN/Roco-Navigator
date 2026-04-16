@@ -106,13 +106,15 @@ class MapManager:
 
     # ==================== 地图区域获取 ====================
 
-    def get_logic_region(self, x: int, y: int, w: int, h: int) -> Optional[np.ndarray]:
+    def get_logic_region(self, x: int, y: int, w: int, h: int,
+                         copy: bool = True) -> Optional[np.ndarray]:
         """
         获取逻辑地图区域 (用于 SIFT 匹配)
 
         Args:
             x, y: 左上角世界坐标
             w, h: 区域尺寸
+            copy: 是否复制数据。SIFT 匹配只读取，可传 False 返回视图以节省内存。
 
         Returns:
             地图区域图像 (BGR)
@@ -128,7 +130,8 @@ class MapManager:
         if x2 <= x1 or y2 <= y1:
             return None
 
-        return self._logic_map[y1:y2, x1:x2].copy()
+        region = self._logic_map[y1:y2, x1:x2]
+        return region.copy() if copy else region
 
     def get_display_region(self, x: int, y: int, w: int, h: int) -> Optional[np.ndarray]:
         """获取显示地图区域 (用于 HUD 显示)"""

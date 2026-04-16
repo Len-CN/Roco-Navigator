@@ -40,9 +40,16 @@ dist/
 *.cubin
 *.fatbin
 
-# Data files (keep structure, ignore user data)
-# data_files/config.json  # Uncomment if you don't want to track user config
+# Claude Code
+.claude/
 
-# Assets (large files)
-# assets/maps/*.png
-# assets/icons/wiki/*
+# Backup files
+*.bak
+*.tmp
+
+# Large assets (runtime downloaded)
+assets/maps/*.png
+assets/icons/wiki/*.png
+
+# User config (contains calibration data, not portable)
+data_files/config.json

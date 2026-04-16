@@ -15,6 +15,7 @@ import time
 from typing import Optional, Tuple, Callable
 from enum import Enum
 from dataclasses import dataclass
+from collections import deque
 
 from roco_navigator.core.screen_capture import ScreenCapture
 from roco_navigator.core.minimap_detector import MinimapDetector, DetectionResult
@@ -37,7 +38,7 @@ class TrackingConfig:
     """追踪配置"""
     global_scan_step: int = 1400       # 全局扫描步长 (像素)
     global_scan_size: int = 1600       # 全局扫描窗口大小
-    tracking_radius: int = 500         # 精确追踪搜索半径
+    tracking_radius: int = 300         # 精确追踪搜索半径 (zoom 7 下 300px 足够覆盖帧间移动)
     max_lost_frames: int = 30          # 最大丢失帧数 -> 惯性导航
     max_inertia_frames: int = 100      # 最大惯性帧数 -> 重新全局扫描
     teleport_threshold: float = 200.0  # 传送检测阈值
@@ -100,6 +101,20 @@ class PositionTracker:
         self._frame_count: int = 0
         self._last_time: float = 0.0
         self._fps: float = 0.0
+        self._dt_history: deque = deque(maxlen=10)  # FPS 滑动窗口
+
+        # 箭头检测降频 (每 2 帧检测一次，方向检测已优化)
+        self._arrow_detect_interval: int = 2
+
+        # 性能优化: 高置信度帧跳过
+        self._skip_counter: int = 0        # 连续跳过帧计数
+        self._max_skip: int = 1            # 最大连续跳过帧数
+        self._skip_confidence_threshold: float = 0.7  # 跳过所需最低置信度
+        self._skip_dist_threshold: float = 5.0        # 上帧位移 < 此值才跳过
+
+        # 全局扫描分帧状态
+        self._scan_positions: list = []
+        self._scan_idx: int = 0
 
         # 回调
         self._on_position_update: Optional[Callable] = None
@@ -146,6 +161,7 @@ class PositionTracker:
         self._running = False
         self._smoothed_x = None
         self._smoothed_y = None
+        self._scan_positions = []
         self._change_state(TrackingState.IDLE)
         logger.info("Tracking stopped")
 
@@ -211,20 +227,22 @@ class PositionTracker:
         if not self._running:
             return None
 
-        # 性能计时
+        # 性能计时 (滑动窗口平均 FPS)
         now = time.perf_counter()
         dt = now - self._last_time
         self._last_time = now
         self._frame_count += 1
         if dt > 0:
-            self._fps = 1.0 / dt
+            self._dt_history.append(dt)
+            avg_dt = sum(self._dt_history) / len(self._dt_history)
+            self._fps = 1.0 / avg_dt if avg_dt > 0 else 0.0
 
         # 截取小地图
         minimap = self._capture_minimap()
         if minimap is None:
             return self._build_status("Failed to capture minimap")
 
-        # 根据状态执行不同策略
+        # 根据状态执行不同策略 (传递原始 BGR 用于箭头检测)
         if self._state == TrackingState.GLOBAL_SCAN:
             return self._do_global_scan(minimap)
         elif self._state == TrackingState.PRECISE_TRACK:
@@ -236,9 +254,9 @@ class PositionTracker:
 
     def _do_global_scan(self, minimap) -> TrackingStatus:
         """
-        全局扫描: 滑动窗口遍历整个大地图
+        全局扫描: 预计算模式下单次全局匹配，否则分帧滑动窗口（不阻塞 UI）
         """
-        # If precomputed features available, do a single global match
+        # 预计算模式: 单次全局匹配 (O(1) 帧耗时，不需要滑动窗口)
         if self._detector._sift_matcher.is_precomputed:
             minimap_gray = self._detector._image_processor.preprocess_minimap(
                 minimap, self._detector._use_clahe, self._detector._use_ring_mask,
@@ -250,9 +268,8 @@ class PositionTracker:
                     min(h, w), self._detector._ring_outer, self._detector._ring_inner)
             result = self._detector._sift_matcher.match_precomputed(
                 minimap_gray, search_center=None, minimap_mask=minimap_mask)
-            if result.success and result.confidence > 0.3:
+            if result.success and result.confidence > 0.15:
                 self._position = result.position
-                # 首次定位：初始化 EMA 但不平滑
                 if result.position is not None:
                     self._smoothed_x = result.position[0]
                     self._smoothed_y = result.position[1]
@@ -261,40 +278,56 @@ class PositionTracker:
                 self._change_state(TrackingState.PRECISE_TRACK)
                 self._notify_position()
                 return self._build_status(
-                    f"Global scan found position via precomputed: "
-                    f"({result.position[0]:.0f}, {result.position[1]:.0f})"
+                    f"Global scan found: ({result.position[0]:.0f}, {result.position[1]:.0f})"
                 )
+            # 预计算全局搜索失败 → 下一帧重试，不阻塞 UI
+            return self._build_status("Global scan: no match, retrying next frame")
 
-        # Fallback: original sliding window scan
+        # 非预计算模式: 分帧滑动窗口 (每帧只扫描一个窗口，不阻塞 UI)
         step = self._config.global_scan_step
         win_size = self._config.global_scan_size
         mw = self._map_manager.map_width
         mh = self._map_manager.map_height
 
-        for y in range(0, mh, step):
-            for x in range(0, mw, step):
-                region = self._map_manager.get_logic_region(x, y, win_size, win_size)
-                if region is None:
-                    continue
+        # 计算所有窗口位置
+        if not hasattr(self, '_scan_positions') or not self._scan_positions:
+            self._scan_positions = [
+                (x, y)
+                for y in range(0, mh, step)
+                for x in range(0, mw, step)
+            ]
+            self._scan_idx = 0
 
+        # 每帧只扫描一个窗口
+        if self._scan_idx < len(self._scan_positions):
+            x, y = self._scan_positions[self._scan_idx]
+            self._scan_idx += 1
+
+            region = self._map_manager.get_logic_region(x, y, win_size, win_size, copy=False)
+            if region is not None:
                 result = self._detector.detect(minimap, region, region_offset=(x, y))
 
                 if result.success and result.confidence > 0.3:
                     self._position = result.position
-                    # 首次定位：初始化 EMA 但不平滑
                     if result.position is not None:
                         self._smoothed_x = result.position[0]
                         self._smoothed_y = result.position[1]
                     self._confidence = result.confidence
                     self._lost_frames = 0
+                    self._scan_positions = []
                     self._change_state(TrackingState.PRECISE_TRACK)
                     self._notify_position()
                     return self._build_status(
-                        f"Global scan found position: ({result.position[0]:.0f}, {result.position[1]:.0f})"
+                        f"Global scan found: ({result.position[0]:.0f}, {result.position[1]:.0f})"
                     )
 
-        # 全局扫描未找到
-        return self._build_status("Global scan: no match found")
+            progress = self._scan_idx
+            total = len(self._scan_positions)
+            return self._build_status(f"Global scan: window {progress}/{total}")
+
+        # 所有窗口扫描完毕，重置
+        self._scan_positions = []
+        return self._build_status("Global scan: no match found, restarting")
 
     def _do_precise_track(self, minimap) -> TrackingStatus:
         """
@@ -306,6 +339,26 @@ class PositionTracker:
 
         px, py = self._position
         radius = self._config.tracking_radius
+
+        # 帧跳过: 高置信度+位置稳定时跳过 SIFT，只做箭头检测
+        if (self._confidence >= self._skip_confidence_threshold
+                and self._skip_counter < self._max_skip
+                and self._prev_position is not None):
+            dx_skip = px - self._prev_position[0]
+            dy_skip = py - self._prev_position[1]
+            dist_skip = (dx_skip * dx_skip + dy_skip * dy_skip) ** 0.5
+            if dist_skip < self._skip_dist_threshold:
+                self._skip_counter += 1
+                # 只做箭头检测
+                if self._frame_count % self._arrow_detect_interval == 0:
+                    arrow_dir = self._detector._arrow_detector.detect_direction(minimap)
+                    if arrow_dir is not None:
+                        self._direction = arrow_dir
+                self._notify_position()
+                return self._build_status(
+                    f"Tracking (skip): ({px:.0f}, {py:.0f}) conf={self._confidence:.2f}"
+                )
+        self._skip_counter = 0
 
         # Use precomputed features with local search if available
         if self._detector._sift_matcher.is_precomputed:
@@ -342,12 +395,18 @@ class PositionTracker:
                 self._confidence = result_sift.confidence
                 self._lost_frames = 0
 
-                # Compute direction from displacement
+                # 箭头方向检测 (每 N 帧一次)
+                if self._frame_count % self._arrow_detect_interval == 0:
+                    arrow_dir = self._detector._arrow_detector.detect_direction(minimap)
+                    if arrow_dir is not None:
+                        self._direction = arrow_dir
+
+                # Fallback: compute direction from displacement
                 if self._prev_position is not None and result_sift.position is not None:
                     dx = result_sift.position[0] - self._prev_position[0]
                     dy = result_sift.position[1] - self._prev_position[1]
                     dist_moved = (dx * dx + dy * dy) ** 0.5
-                    if dist_moved > 3.0:
+                    if dist_moved > 3.0 and self._frame_count % self._arrow_detect_interval != 0:
                         self._direction = (math.degrees(math.atan2(dx, -dy))) % 360
                 if result_sift.position is not None:
                     self._prev_position = result_sift.position
@@ -362,7 +421,7 @@ class PositionTracker:
                 if self._detector.should_use_ai_fallback:
                     region = self._map_manager.get_logic_region(
                         int(max(0, px - radius)), int(max(0, py - radius)),
-                        radius * 2, radius * 2
+                        radius * 2, radius * 2, copy=False
                     )
                     if region is not None:
                         success, ai_result = self._detector.try_ai_match(
@@ -378,11 +437,16 @@ class PositionTracker:
                                 self._position = ai_result.position
                             self._confidence = ai_result.confidence
                             self._lost_frames = 0
+                            # 箭头方向检测
+                            if self._frame_count % self._arrow_detect_interval == 0:
+                                arrow_dir = self._detector._arrow_detector.detect_direction(minimap)
+                                if arrow_dir is not None:
+                                    self._direction = arrow_dir
                             if self._prev_position is not None and ai_result.position is not None:
                                 dx = ai_result.position[0] - self._prev_position[0]
                                 dy = ai_result.position[1] - self._prev_position[1]
                                 dist_moved = (dx * dx + dy * dy) ** 0.5
-                                if dist_moved > 3.0:
+                                if dist_moved > 3.0 and self._frame_count % self._arrow_detect_interval != 0:
                                     self._direction = (math.degrees(math.atan2(dx, -dy))) % 360
                             if ai_result.position is not None:
                                 self._prev_position = ai_result.position
@@ -404,7 +468,7 @@ class PositionTracker:
         w = radius * 2
         h = radius * 2
 
-        region = self._map_manager.get_logic_region(x1, y1, w, h)
+        region = self._map_manager.get_logic_region(x1, y1, w, h, copy=False)
         if region is None:
             self._lost_frames += 1
             return self._build_status("Failed to get search region")
@@ -469,19 +533,54 @@ class PositionTracker:
         if self._position:
             px, py = self._position
             radius = self._config.tracking_radius * 2
-            x1 = int(max(0, px - radius))
-            y1 = int(max(0, py - radius))
+            recovered = False
 
-            region = self._map_manager.get_logic_region(x1, y1, radius * 2, radius * 2)
-            if region is not None:
-                result = self._detector.detect(minimap, region, region_offset=(x1, y1))
-                if result.success:
-                    self._position = result.position
-                    self._confidence = result.confidence
-                    self._lost_frames = 0
-                    self._change_state(TrackingState.PRECISE_TRACK)
-                    self._notify_position()
-                    return self._build_status("Recovered from inertia mode")
+            # 优先使用预计算特征恢复（更快）
+            if self._detector._sift_matcher.is_precomputed:
+                minimap_gray = self._detector._image_processor.preprocess_minimap(
+                    minimap, self._detector._use_clahe, self._detector._use_ring_mask,
+                    self._detector._ring_outer, self._detector._ring_inner)
+                minimap_mask = None
+                if self._detector._use_ring_mask:
+                    h, w = minimap_gray.shape[:2]
+                    minimap_mask = self._detector._image_processor.create_ring_mask(
+                        min(h, w), self._detector._ring_outer, self._detector._ring_inner)
+                result_sift = self._detector._sift_matcher.match_precomputed(
+                    minimap_gray,
+                    search_center=self._position,
+                    search_radius=radius,
+                    minimap_mask=minimap_mask)
+                if result_sift.success:
+                    # EMA 平滑后恢复
+                    if result_sift.position is not None:
+                        smoothed = self._smooth_position(result_sift.position[0], result_sift.position[1])
+                        self._position = smoothed
+                    else:
+                        self._position = result_sift.position
+                    self._confidence = result_sift.confidence
+                    recovered = True
+            else:
+                # Fallback: region-based 恢复
+                x1 = int(max(0, px - radius))
+                y1 = int(max(0, py - radius))
+                region = self._map_manager.get_logic_region(x1, y1, radius * 2, radius * 2, copy=False)
+                if region is not None:
+                    result = self._detector.detect(minimap, region, region_offset=(x1, y1))
+                    if result.success:
+                        # EMA 平滑后恢复
+                        if result.position is not None:
+                            smoothed = self._smooth_position(result.position[0], result.position[1])
+                            self._position = smoothed
+                        else:
+                            self._position = result.position
+                        self._confidence = result.confidence
+                        recovered = True
+
+            if recovered:
+                self._lost_frames = 0
+                self._change_state(TrackingState.PRECISE_TRACK)
+                self._notify_position()
+                return self._build_status("Recovered from inertia mode")
 
         # 超过最大惯性帧数，重新全局扫描
         if self._lost_frames > self._config.max_inertia_frames:

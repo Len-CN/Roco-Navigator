@@ -19,16 +19,19 @@ class ArrowDetector:
     """检测小地图中心的黄色箭头朝向"""
 
     def __init__(self):
-        # Yellow arrow HSV range (wider range for different lighting)
-        self._lower_yellow = np.array([10, 80, 150])
-        self._upper_yellow = np.array([40, 255, 255])
+        # Yellow arrow HSV range (收紧范围，减少地图黄色元素误检)
+        self._lower_yellow = np.array([15, 100, 180])
+        self._upper_yellow = np.array([35, 255, 255])
 
         # Minimum pixel count to consider a valid arrow detection
         self._min_arrow_pixels = 15
 
-        # Angle smoothing buffer (last N valid detections)
+        # Angle smoothing buffer (5帧平衡稳定性和响应速度)
         self._angle_history: deque = deque(maxlen=5)
         self._last_valid_angle: Optional[float] = None
+
+        # 裁剪区域圆形遮罩缓存
+        self._crop_mask_cache: dict = {}
 
     def detect_direction(self, minimap_bgr: np.ndarray) -> Optional[float]:
         """
@@ -46,8 +49,8 @@ class ArrowDetector:
         """
         h, w = minimap_bgr.shape[:2]
 
-        # Extract smaller center region (15% of minimap) for speed + precision
-        size = min(h, w) // 6
+        # 缩小裁剪区域 (//8)，聚焦箭头本体，减少地图元素干扰
+        size = min(h, w) // 8
         cy, cx = h // 2, w // 2
         y1 = max(0, cy - size)
         y2 = min(h, cy + size)
@@ -55,9 +58,21 @@ class ArrowDetector:
         x2 = min(w, cx + size)
         center_crop = minimap_bgr[y1:y2, x1:x2]
 
+        # 预模糊降噪，减少 HSV 阈值化后的碎片轮廓
+        blurred = cv2.GaussianBlur(center_crop, (5, 5), 0)
+
         # Convert to HSV and threshold for yellow
-        hsv = cv2.cvtColor(center_crop, cv2.COLOR_BGR2HSV)
+        hsv = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)
         mask = cv2.inRange(hsv, self._lower_yellow, self._upper_yellow)
+
+        # 圆形遮罩：抑制裁剪区域边角的地图元素
+        crop_h, crop_w = mask.shape[:2]
+        crop_size = min(crop_h, crop_w)
+        if crop_size not in self._crop_mask_cache:
+            cmask = np.zeros((crop_h, crop_w), dtype=np.uint8)
+            cv2.circle(cmask, (crop_w // 2, crop_h // 2), crop_size // 2, 255, -1)
+            self._crop_mask_cache[crop_size] = cmask
+        mask = cv2.bitwise_and(mask, self._crop_mask_cache[crop_size])
 
         # Morphological cleanup
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
@@ -76,8 +91,25 @@ class ArrowDetector:
 
         # Get the largest contour (should be the arrow)
         largest = max(contours, key=cv2.contourArea)
-        if cv2.contourArea(largest) < self._min_arrow_pixels:
+        area = cv2.contourArea(largest)
+        if area < self._min_arrow_pixels:
             return self._last_valid_angle
+
+        # 轮廓形状验证：面积不应超过裁剪区的 50%（否则是大面积黄色误检）
+        crop_area = (y2 - y1) * (x2 - x1)
+        if area > crop_area * 0.5:
+            logger.debug("Arrow rejected: contour area %d > 50%% of crop %d", area, crop_area)
+            return self._last_valid_angle
+
+        # 最小外接矩形宽高比检查：箭头应有一定长宽比
+        rect = cv2.minAreaRect(largest)
+        rw, rh = rect[1]
+        if rw > 0 and rh > 0:
+            aspect = max(rw, rh) / min(rw, rh)
+            if aspect < 1.2:
+                # 太接近正方形/圆形，不像箭头
+                logger.debug("Arrow rejected: aspect ratio %.2f < 1.2", aspect)
+                return self._last_valid_angle
 
         # Find arrow tip using convex hull defect analysis
         angle = self._find_arrow_direction(largest)
@@ -89,63 +121,44 @@ class ArrowDetector:
 
     def _find_arrow_direction(self, contour: np.ndarray) -> Optional[float]:
         """
-        Find arrow direction using convex hull tip detection.
+        Find arrow direction using farthest-convex-hull-vertex method.
 
-        The arrow tip is the sharpest vertex of the convex hull
-        (smallest angle between adjacent hull edges).
+        箭头的质心偏向底部（像素密集区），尖端是距质心最远的凸包顶点。
+        比"最锐角"方法更鲁棒，不依赖精确的角度计算。
         """
         pts = contour.reshape(-1, 2).astype(np.float32)
         if len(pts) < 5:
             return self._pca_fallback(pts)
 
-        # Compute centroid
-        mean = np.mean(pts, axis=0)
+        # 用矩阵计算精确质心
+        M = cv2.moments(contour)
+        if M["m00"] < 1:
+            return self._pca_fallback(pts)
+        cx = M["m10"] / M["m00"]
+        cy = M["m01"] / M["m00"]
 
-        # Get convex hull indices (counter-clockwise)
-        hull = cv2.convexHull(contour, returnPoints=False)
+        # 凸包去噪
+        hull = cv2.convexHull(contour, returnPoints=True)
         if hull is None or len(hull) < 3:
             return self._pca_fallback(pts)
 
-        hull_pts = contour[hull.flatten()].reshape(-1, 2).astype(np.float32)
-        n = len(hull_pts)
-        if n < 3:
-            return self._pca_fallback(pts)
+        hull_pts = hull.reshape(-1, 2).astype(np.float32)
 
-        # Find the sharpest angle (smallest interior angle = tip of arrow)
-        min_angle = float('inf')
-        tip_idx = 0
-
-        for i in range(n):
-            p_prev = hull_pts[(i - 1) % n]
-            p_curr = hull_pts[i]
-            p_next = hull_pts[(i + 1) % n]
-
-            v1 = p_prev - p_curr
-            v2 = p_next - p_curr
-
-            len1 = np.linalg.norm(v1)
-            len2 = np.linalg.norm(v2)
-            if len1 < 1e-6 or len2 < 1e-6:
-                continue
-
-            cos_angle = np.dot(v1, v2) / (len1 * len2)
-            cos_angle = np.clip(cos_angle, -1.0, 1.0)
-            angle = math.acos(cos_angle)
-
-            if angle < min_angle:
-                min_angle = angle
-                tip_idx = i
-
-        # Arrow direction: from centroid to tip
+        # 找距质心最远的凸包顶点 → 箭头尖端
+        dx = hull_pts[:, 0] - cx
+        dy = hull_pts[:, 1] - cy
+        dists_sq = dx * dx + dy * dy
+        tip_idx = int(np.argmax(dists_sq))
         tip = hull_pts[tip_idx]
-        dx = tip[0] - mean[0]
-        dy = tip[1] - mean[1]
 
-        if abs(dx) < 0.5 and abs(dy) < 0.5:
+        dx_tip = tip[0] - cx
+        dy_tip = tip[1] - cy
+
+        if abs(dx_tip) < 0.5 and abs(dy_tip) < 0.5:
             return self._pca_fallback(pts)
 
         # Convert to compass bearing (0=north/up, clockwise)
-        compass = (math.degrees(math.atan2(dx, -dy))) % 360
+        compass = (math.degrees(math.atan2(dx_tip, -dy_tip))) % 360
         return compass
 
     def _pca_fallback(self, pts: np.ndarray) -> Optional[float]:
@@ -176,14 +189,13 @@ class ArrowDetector:
 
     def _smooth_angle(self, raw_angle: float) -> float:
         """
-        Smooth angle using weighted moving average.
-        Filter out large jumps (> 90 degrees).
+        Smooth angle using exponential-weighted circular mean.
+        Filter out large jumps (> 120 degrees).
         """
         if self._last_valid_angle is not None:
-            # Calculate shortest angular difference
             diff = ((raw_angle - self._last_valid_angle + 180) % 360) - 180
             if abs(diff) > 120:
-                # Large jump — likely a detection error, use last valid
+                # 大跳变 — 检测错误，沿用上次值
                 return self._last_valid_angle
 
         self._angle_history.append(raw_angle)
@@ -192,13 +204,13 @@ class ArrowDetector:
         if len(self._angle_history) < 2:
             return raw_angle
 
-        # Weighted average (recent values weighted more)
-        # Use circular mean to handle 0/360 wraparound
+        # 指数权重圆周均值 (最新帧权重最大)
         sin_sum = 0.0
         cos_sum = 0.0
         weight_sum = 0.0
+        n = len(self._angle_history)
         for i, a in enumerate(self._angle_history):
-            w = i + 1  # linear weight: older=1, newest=N
+            w = 2.0 ** i  # 指数权重: 1, 2, 4, 8, 16
             sin_sum += w * math.sin(math.radians(a))
             cos_sum += w * math.cos(math.radians(a))
             weight_sum += w

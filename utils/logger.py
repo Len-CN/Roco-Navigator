@@ -3,12 +3,14 @@
 
 提供统一的日志配置和管理。
 支持文件日志和控制台日志输出。
+启动时自动清理超过 7 天的旧日志。
 """
 
+import glob
 import logging
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
 
@@ -18,6 +20,9 @@ LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 # 文件日志格式 (更详细)
 FILE_LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s (%(filename)s:%(lineno)d): %(message)s"
+
+# 日志保留天数
+LOG_RETENTION_DAYS = 7
 
 # 是否已初始化
 _initialized = False
@@ -80,5 +85,37 @@ def setup_logger(
     
     if not name:
         _initialized = True
-    
+        # 首次初始化时清理旧日志
+        if log_to_file and log_dir:
+            _cleanup_old_logs(log_dir)
+
     return logger
+
+
+def _cleanup_old_logs(log_dir: str, retention_days: int = LOG_RETENTION_DAYS):
+    """
+    清理超过保留天数的旧日志文件
+
+    Args:
+        log_dir: 日志目录
+        retention_days: 保留天数 (默认 7 天)
+    """
+    cutoff = datetime.now() - timedelta(days=retention_days)
+    pattern = os.path.join(log_dir, "roco_navigator_*.log")
+    removed = 0
+
+    for log_file in glob.glob(pattern):
+        basename = os.path.basename(log_file)
+        # 从文件名提取日期: roco_navigator_20260415.log
+        try:
+            date_str = basename.replace("roco_navigator_", "").replace(".log", "")
+            file_date = datetime.strptime(date_str, "%Y%m%d")
+            if file_date < cutoff:
+                os.remove(log_file)
+                removed += 1
+        except (ValueError, OSError):
+            continue
+
+    if removed > 0:
+        logger = logging.getLogger(__name__)
+        logger.info("已清理 %d 个超过 %d 天的旧日志文件", removed, retention_days)

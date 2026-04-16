@@ -25,8 +25,6 @@ from roco_navigator.ui.overlay_hud import OverlayHUD
 from roco_navigator.ui.widgets.neumorphic import (
     BG_PRIMARY, BG_SECONDARY, TEXT_SECONDARY
 )
-from roco_navigator.utils.gpu_utils import GPUManager
-
 # Core modules
 from roco_navigator.core.screen_capture import ScreenCapture
 from roco_navigator.core.minimap_detector import MinimapDetector
@@ -63,7 +61,7 @@ class WikiUpdateWorker(QThread):
     def run(self):
         cb = lambda pct, text: self.progress.emit(pct, text)
         if self._task == "map":
-            success, msg = self._updater.download_map(zoom=6, progress_callback=cb)
+            success, msg = self._updater.download_map(zoom=7, progress_callback=cb)
         else:
             success, msg = self._updater.update_points(progress_callback=cb)
         self.finished.emit(success, msg)
@@ -645,8 +643,8 @@ class MainWindow(QMainWindow):
 
     def _try_load_map(self):
         """尝试加载已下载的地图"""
-        # Try zoom levels from high to low
-        for z in [6, 7, 5, 8, 4]:
+        # Try zoom levels from high to low (优先 zoom 7 以获得更好的定位精度)
+        for z in [7, 6, 8, 5, 4]:
             map_path = self._wiki_updater.get_map_path(z)
             if map_path:
                 if self._map_manager.load_map(map_path, f"world_z{z}"):

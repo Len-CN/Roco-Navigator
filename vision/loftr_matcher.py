@@ -6,6 +6,7 @@ LoFTR (Detector-Free Local Feature Matching with Transformers) 匹配器
 """
 
 import logging
+import math
 import time
 from typing import Optional, Tuple, List
 from dataclasses import dataclass
@@ -128,29 +129,31 @@ class LoFTRMatcher:
 
         LoFTR expects grayscale float32 tensor [1, 1, H, W] with values in [0, 1].
         Dimensions must be divisible by 8.
+        参考 Game-Map-Tracker: 向下取整裁剪（而非向上取整上采样），
+        避免插值伪影和不必要的张量增大。
         """
         import torch
-        
+
         if len(image.shape) == 3:
             gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         else:
             gray = image
 
-        # Resize to dimensions divisible by 8 (avoid zero-padding which creates
-        # black borders that produce spurious matches)
+        # 向下取整到 8 的倍数（裁剪而非上采样）
         h, w = gray.shape
-        new_h = ((h + 7) // 8) * 8
-        new_w = ((w + 7) // 8) * 8
+        new_h = h - (h % 8)
+        new_w = w - (w % 8)
         if new_h != h or new_w != w:
-            gray = cv2.resize(gray, (new_w, new_h))
+            gray = gray[:new_h, :new_w]
 
         # Convert to tensor
-        tensor = torch.from_numpy(gray).float() / 255.0
+        tensor = torch.from_numpy(gray.copy()).float() / 255.0
         tensor = tensor.unsqueeze(0).unsqueeze(0)  # [1, 1, H, W]
         return tensor.to(self._device)
 
     def match(self, minimap: np.ndarray, map_region: np.ndarray,
-              region_offset: Tuple[float, float] = (0, 0)) -> LoFTRMatchResult:
+              region_offset: Tuple[float, float] = (0, 0),
+              minimap_mask: Optional[np.ndarray] = None) -> LoFTRMatchResult:
         """
         Match minimap against a map region using LoFTR.
 
@@ -158,15 +161,24 @@ class LoFTRMatcher:
             minimap: Minimap image (BGR or grayscale)
             map_region: Map region to match against (BGR or grayscale)
             region_offset: Offset of the map_region in world coordinates
+            minimap_mask: 圆环遮罩，去除小地图中心玩家图标和边角 UI
 
         Returns:
             LoFTRMatchResult with position in world coordinates
         """
         import torch
-        
+
         try:
+            # 对小地图应用圆环遮罩（去除玩家图标和边角 UI 的干扰）
+            minimap_input = minimap
+            if minimap_mask is not None:
+                if len(minimap.shape) == 3:
+                    minimap_input = cv2.bitwise_and(minimap, minimap, mask=minimap_mask)
+                else:
+                    minimap_input = cv2.bitwise_and(minimap, minimap, mask=minimap_mask)
+
             # Preprocess images
-            img0 = self._preprocess(minimap)
+            img0 = self._preprocess(minimap_input)
             img1 = self._preprocess(map_region)
 
             # Run LoFTR matching
@@ -219,12 +231,27 @@ class LoFTRMatcher:
             world_x = float(world_pt[0][0][0]) + region_offset[0]
             world_y = float(world_pt[0][0][1]) + region_offset[1]
 
+            # Homography 质量验证
+            det = abs(H[0, 0] * H[1, 1] - H[0, 1] * H[1, 0])
+            inlier_ratio = inliers / max(len(mkpts0), 1)
+            if det < 0.01 or det > 100:
+                logger.debug("LoFTR homography rejected: det=%.4f", det)
+                return LoFTRMatchResult(success=False, num_matches=len(mkpts0),
+                                         inliers=inliers)
+            if inlier_ratio < 0.25:
+                logger.debug("LoFTR homography rejected: inlier_ratio=%.2f", inlier_ratio)
+                return LoFTRMatchResult(success=False, num_matches=len(mkpts0),
+                                         inliers=inliers)
+
+            # 置信度：LoFTR confidence 均值 × 内点率 × 数量因子
             avg_conf = float(confidence.mean()) if len(confidence) > 0 else 0.0
+            final_confidence = min(1.0, avg_conf * inlier_ratio * math.sqrt(
+                inliers / max(self._min_matches, 1)))
 
             return LoFTRMatchResult(
                 success=True,
                 position=(world_x, world_y),
-                confidence=avg_conf,
+                confidence=final_confidence,
                 num_matches=len(mkpts0),
                 inliers=inliers,
                 homography=H

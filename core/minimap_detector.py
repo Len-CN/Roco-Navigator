@@ -226,10 +226,12 @@ class MinimapDetector:
                 )
             else:
                 # Fallback: original region-based matching
+                # 有历史位置时视为局部搜索，使用更严格的 ratio 阈值
                 sift_result = self._sift_matcher.match(
                     minimap_gray, region_gray,
                     minimap_mask=minimap_mask,
-                    region_offset=region_offset
+                    region_offset=region_offset,
+                    is_local=self._history.last is not None
                 )
 
             if sift_result.success and self._validate_position(sift_result.position):
@@ -252,8 +254,16 @@ class MinimapDetector:
             or (self._detection_mode == "hybrid" and self._use_ai)
         )
         if use_ai_now and self._loftr_matcher is not None:
+            # 为 LoFTR 也提供圆环遮罩，去除玩家图标和边角 UI 的干扰
+            loftr_mask = None
+            if self._use_ring_mask:
+                mh, mw = minimap_bgr.shape[:2]
+                loftr_mask = self._image_processor.create_ring_mask(
+                    min(mh, mw), self._ring_outer, self._ring_inner
+                )
             ai_result = self._loftr_matcher.match(
-                minimap_bgr, map_region_bgr, region_offset
+                minimap_bgr, map_region_bgr, region_offset,
+                minimap_mask=loftr_mask
             )
             if ai_result.success and self._validate_position(ai_result.position):
                 self._history.add(ai_result.position)
@@ -406,13 +416,14 @@ class MinimapDetector:
         if self._history.last is None:
             return True  # 第一次检测，接受任何位置
 
-        # 检查移动距离
+        # 检查移动距离 — 仅拒绝明显不合理的跳变
+        # 正常传送（几百px）由 position_tracker 的传送检测处理
         last = self._history.last
         dx = position[0] - last[0]
         dy = position[1] - last[1]
         distance = (dx ** 2 + dy ** 2) ** 0.5
 
-        max_speed = 500  # 最大合理移动距离 (像素/帧)
+        max_speed = 2000  # 仅拒绝极端跳变（匹配错误），传送由 tracker 层处理
         if distance > max_speed:
             logger.warning(
                 "Position jump detected: %.1f pixels (max=%d)",
@@ -533,8 +544,16 @@ class MinimapDetector:
         """Attempt LoFTR AI matching. Returns (success, result) or (False, None)."""
         if self._loftr_matcher is None:
             return False, None
+        # 为 LoFTR 提供圆环遮罩
+        loftr_mask = None
+        if self._use_ring_mask:
+            mh, mw = minimap_bgr.shape[:2]
+            loftr_mask = self._image_processor.create_ring_mask(
+                min(mh, mw), self._ring_outer, self._ring_inner
+            )
         ai_result = self._loftr_matcher.match(
-            minimap_bgr, map_region_bgr, region_offset
+            minimap_bgr, map_region_bgr, region_offset,
+            minimap_mask=loftr_mask
         )
         if ai_result.success:
             return True, ai_result
