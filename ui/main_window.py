@@ -557,21 +557,28 @@ class MainWindow(QMainWindow):
                 nav_info.current_target[1] - pos[1] + half,
             )
 
-        # Gather resource points within the crop area
+        # 只传递规划路线中的点位 (不传全部资源点)
         resource_rel = []
-        crop_x1 = pos[0] - half
-        crop_y1 = pos[1] - half
-        display_list = self._resource_manager.to_display_list()
-        for res in display_list:
-            rx = res["x"] - crop_x1
-            ry = res["y"] - crop_y1
-            # Only include points within crop bounds (with small margin)
-            if -10 <= rx <= hud_crop_size + 10 and -10 <= ry <= hud_crop_size + 10:
-                resource_rel.append({
-                    "rx": rx, "ry": ry,
-                    "type": res.get("type", ""),
-                    "name": res.get("name", ""),
-                })
+        if self._navigator.route:
+            display_list = self._resource_manager.to_display_list()
+            # 建立坐标→资源的快速查找 (四舍五入到整数避免浮点误差)
+            res_lookup = {}
+            for res in display_list:
+                key = (round(res["x"]), round(res["y"]))
+                res_lookup[key] = res
+            # 只保留路线中的点位
+            for pt in self._navigator.route:
+                key = (round(pt[0]), round(pt[1]))
+                res = res_lookup.get(key)
+                rx = pt[0] - (pos[0] - half)
+                ry = pt[1] - (pos[1] - half)
+                if -10 <= rx <= hud_crop_size + 10 and -10 <= ry <= hud_crop_size + 10:
+                    resource_rel.append({
+                        "rx": rx, "ry": ry,
+                        "type": res.get("type", "") if res else "",
+                        "name": res.get("name", "") if res else "",
+                        "mark_type": res.get("mark_type", 0) if res else 0,
+                    })
 
         self._overlay_hud.update_navigation(
             map_crop=crop,
@@ -716,6 +723,9 @@ class MainWindow(QMainWindow):
         import os
         icons_dir = os.path.join(self._wiki_updater._icons_dir)
         self._map_canvas.load_resource_icons(icons_dir, cache.get("mark_types", []))
+
+        # 共享图标缓存给 HUD
+        self._overlay_hud.set_icon_cache(self._map_canvas._icon_cache)
 
         self._sidebar.set_data_info(f"已从 WIKI 加载 {count} 个点位")
         logger.info("Loaded %d points from cache", count)

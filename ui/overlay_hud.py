@@ -29,7 +29,7 @@ from PyQt5.QtGui import (
 
 from roco_navigator.ui.widgets.neumorphic import (
     BG_PRIMARY, BG_SECONDARY, TEXT_PRIMARY, TEXT_SECONDARY,
-    ACCENT, SUCCESS, ERROR, SHADOW_DARK
+    ACCENT, SUCCESS, ERROR, SHADOW_DARK, SHADOW_LIGHT
 )
 
 logger = logging.getLogger(__name__)
@@ -128,6 +128,8 @@ class OverlayHUD(QWidget):
 
         # 缓存
         self._bg_cache: Optional[QPixmap] = None
+        self._icon_cache: dict = {}  # {mark_type_id: QPixmap} 来自 MapCanvas
+        self._hud_icon_size: int = 16  # HUD 上图标尺寸
 
         self._passthrough = False
 
@@ -245,6 +247,23 @@ class OverlayHUD(QWidget):
         gradient.setColorAt(0, QColor(255, 255, 255, 20))
         gradient.setColorAt(1, QColor(184, 188, 194, 15))
         painter.fillPath(path, gradient)
+
+        if self._shape == "circle":
+            # 新拟物派深度：外阴影描边 + 内高光
+            cx, cy = self.width() / 2, self.height() / 2
+            r = min(cx, cy) - 1
+
+            # 外圈阴影描边
+            painter.setPen(QPen(QColor(SHADOW_DARK), 2.5))
+            painter.setBrush(Qt.NoBrush)
+            painter.drawEllipse(QPointF(cx, cy), r, r)
+
+            # 内高光弧 (左上 135° 范围)
+            highlight_pen = QPen(QColor(255, 255, 255, 90), 2.5)
+            highlight_pen.setCapStyle(Qt.RoundCap)
+            painter.setPen(highlight_pen)
+            arc_rect = QRectF(cx - r, cy - r, r * 2, r * 2)
+            painter.drawArc(arc_rect, 120 * 16, 140 * 16)  # Qt arc: 1/16 度
 
     def _draw_map_area(self, painter: QPainter):
         """绘制地图区域"""
@@ -442,40 +461,35 @@ class OverlayHUD(QWidget):
         painter.restore()
 
     def _draw_resource_points(self, painter: QPainter):
-        """Draw nearby resource points on the HUD map"""
+        """绘制路线规划中的资源点 (优先用图标，回退到彩色圆点)"""
         if not self._resource_rel_points:
             return
 
         painter.save()
+        half = self._hud_icon_size // 2
         for res in self._resource_rel_points:
             rx = res.get("rx", 0) * self._crop_scale + self._map_rect.x()
             ry = res.get("ry", 0) * self._crop_scale + self._map_rect.y()
 
-            # Check if within map area
             if not self._map_rect.contains(int(rx), int(ry)):
                 continue
 
-            # Draw small colored dot
-            color = self._get_resource_color(res.get("type", ""))
-            painter.setBrush(QColor(color))
-            painter.setPen(QPen(QColor("#ffffff"), 1))
-            painter.drawEllipse(QPointF(rx, ry), 3, 3)
+            # 优先用资源图标
+            mt = res.get("mark_type", 0)
+            icon = self._icon_cache.get(mt) if mt else None
+            if icon and not icon.isNull():
+                scaled = icon.scaled(
+                    self._hud_icon_size, self._hud_icon_size,
+                    Qt.KeepAspectRatio, Qt.SmoothTransformation
+                )
+                painter.drawPixmap(int(rx) - half, int(ry) - half, scaled)
+            else:
+                # 回退：彩色圆点
+                painter.setBrush(QColor("#ed8936"))
+                painter.setPen(QPen(QColor("#ffffff"), 1))
+                painter.drawEllipse(QPointF(rx, ry), 4, 4)
 
         painter.restore()
-
-    def _get_resource_color(self, res_type: str) -> str:
-        """Return a color for each resource type category"""
-        colors = {
-            "采集": "#48bb78",      # green
-            "收集": "#ed8936",      # orange
-            "宝箱": "#ecc94b",      # yellow
-            "地点": "#667eea",      # blue/purple
-            "精灵分布": "#f56565",  # red
-            "战斗": "#e53e3e",      # dark red
-            "互动事件": "#9f7aea",  # purple
-            "任务": "#38b2ac",      # teal
-        }
-        return colors.get(res_type, "#a0aec0")  # default gray
 
     def _draw_info_area(self, painter: QPainter):
         """绘制信息区域"""
@@ -756,6 +770,10 @@ class OverlayHUD(QWidget):
         )
         if ok:
             self._set_crop_size(val)
+
+    def set_icon_cache(self, cache: dict):
+        """接收 MapCanvas 的图标缓存 {mark_type_id: QPixmap}"""
+        self._icon_cache = cache
 
     @property
     def crop_size(self) -> int:
