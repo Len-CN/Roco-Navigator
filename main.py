@@ -71,10 +71,10 @@ def check_environment():
                     logger.info("已自动安装 CPU 版本，请重新启动程序")
                     logger.info("如需使用 CUDA 版本，请先安装 CUDA Toolkit 12.x/13.x")
                 else:
-                    logger.error("自动安装 CPU 版本失败，请手动运行: install_opencv_cpu.bat")
+                    logger.error("自动安装 CPU 版本失败，请重新运行 start.bat 自动修复")
             except Exception as install_error:
                 logger.error(f"自动安装失败: {install_error}")
-                logger.error("请手动运行: install_opencv_cpu.bat")
+                logger.error("请重新运行 start.bat 自动修复")
             return False
         else:
             logger.error(

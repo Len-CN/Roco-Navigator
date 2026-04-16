@@ -950,14 +950,27 @@ class MainWindow(QMainWindow):
     # ==================== Misc ====================
 
     def _update_gpu_status(self):
+        # LoFTR (PyTorch CUDA)
+        mode = self._settings.get("tracking.detection_mode", "sift")
+        if mode in ("ai", "hybrid") and self._minimap_detector.is_ai_available:
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    self._status_bar.set_gpu_status("GPU 模式 (LoFTR)")
+                    return
+            except ImportError:
+                pass
+
+        # OpenCV CUDA
         try:
             import cv2
             if hasattr(cv2, 'cuda') and cv2.cuda.getCudaEnabledDeviceCount() > 0:
                 self._status_bar.set_gpu_status("GPU 模式 (CUDA)")
-            else:
-                self._status_bar.set_gpu_status("CPU 模式")
+                return
         except Exception:
-            self._status_bar.set_gpu_status("CPU 模式")
+            pass
+
+        self._status_bar.set_gpu_status("CPU 模式")
 
     def _center_on_screen(self):
         screen = QApplication.primaryScreen()
