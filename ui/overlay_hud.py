@@ -578,7 +578,6 @@ class OverlayHUD(QWidget):
             offset_y = (h - self._map_size) // 2
             self._map_rect = QRect(offset_x, offset_y, self._map_size, self._map_size)
             self._info_rect = QRect()
-            self.setMask(QRegion(self.rect(), QRegion.Ellipse))
         else:
             # 圆角矩形: 完整 UI (地图 + 信息栏)
             self._map_size = min(w - self._padding * 2,
@@ -592,7 +591,9 @@ class OverlayHUD(QWidget):
                 self._padding, self._padding + self._map_size + 8,
                 w - self._padding * 2, self._info_height
             )
-            self.clearMask()
+
+        # 不用 setMask — 靠 QPainterPath + 透明背景实现抗锯齿边缘
+        self.clearMask()
 
         self._bg_cache = None
         self.update()
@@ -607,7 +608,19 @@ class OverlayHUD(QWidget):
         """设置形状: rounded_rect(完整UI), circle(纯地图)"""
         if shape not in ("rounded_rect", "circle"):
             shape = "rounded_rect"
+        old_shape = self._shape
         self._shape = shape
+
+        # 切换时调整窗口尺寸
+        if old_shape == "circle" and shape == "rounded_rect":
+            # 从圆切方：增加高度容纳信息栏
+            w = self.width()
+            self.resize(w, w + self._info_height + 8)
+        elif old_shape == "rounded_rect" and shape == "circle":
+            # 从方切圆：取宽度做正方形
+            side = self.width()
+            self.resize(side, side)
+
         self._update_layout()
         self.shape_changed.emit(shape)
 
