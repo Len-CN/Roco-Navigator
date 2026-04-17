@@ -249,21 +249,41 @@ class OverlayHUD(QWidget):
         painter.fillPath(path, gradient)
 
         if self._shape == "circle":
-            # 新拟物派深度：外阴影描边 + 内高光
+            # 新拟物派：暗影层 + 高光层 + 主体 + 内凹边
             cx, cy = self.width() / 2, self.height() / 2
-            r = min(cx, cy) - 1
+            r = min(cx, cy) - 4  # 留出阴影空间
 
-            # 外圈阴影描边
-            painter.setPen(QPen(QColor(SHADOW_DARK), 2.5))
-            painter.setBrush(Qt.NoBrush)
+            painter.setPen(Qt.NoPen)
+
+            # 1) 右下暗影 (偏移 +3,+3)
+            painter.setBrush(QColor(SHADOW_DARK))
+            painter.drawEllipse(QPointF(cx + 3, cy + 3), r, r)
+
+            # 2) 左上高光 (偏移 -3,-3)
+            painter.setBrush(QColor(255, 255, 255, 200))
+            painter.drawEllipse(QPointF(cx - 3, cy - 3), r, r)
+
+            # 3) 主体圆 (覆盖阴影，露出边缘)
+            painter.setBrush(QColor(BG_PRIMARY))
             painter.drawEllipse(QPointF(cx, cy), r, r)
 
-            # 内高光弧 (左上 135° 范围)
-            highlight_pen = QPen(QColor(255, 255, 255, 90), 2.5)
+            # 4) 主体上的微妙径向渐变
+            body_grad = QRadialGradient(cx, cy * 0.7, r * 1.2)
+            body_grad.setColorAt(0, QColor(255, 255, 255, 30))
+            body_grad.setColorAt(1, QColor(0, 0, 0, 0))
+            painter.setBrush(body_grad)
+            painter.drawEllipse(QPointF(cx, cy), r, r)
+
+            # 5) 内凹边框 (深色内圈 + 浅色内高光弧)
+            inner_r = r - self._padding
+            painter.setBrush(Qt.NoBrush)
+            painter.setPen(QPen(QColor(SHADOW_DARK), 1.5))
+            painter.drawEllipse(QPointF(cx, cy), inner_r, inner_r)
+            highlight_pen = QPen(QColor(255, 255, 255, 120), 1.5)
             highlight_pen.setCapStyle(Qt.RoundCap)
             painter.setPen(highlight_pen)
-            arc_rect = QRectF(cx - r, cy - r, r * 2, r * 2)
-            painter.drawArc(arc_rect, 120 * 16, 140 * 16)  # Qt arc: 1/16 度
+            arc_rect = QRectF(cx - inner_r, cy - inner_r, inner_r * 2, inner_r * 2)
+            painter.drawArc(arc_rect, 110 * 16, 160 * 16)
 
     def _draw_map_area(self, painter: QPainter):
         """绘制地图区域"""
@@ -647,10 +667,15 @@ class OverlayHUD(QWidget):
                 new_w = max(180, min(800, self._resize_start_w + delta.x()))
             if self._resize_edge in ("bottom", "corner"):
                 new_h = max(200, min(800, self._resize_start_h + delta.y()))
-            # 圆形模式强制正方形
+            # 圆形模式强制正方形：跟随被拖拽的边
             if self._shape == "circle":
-                side = max(new_w, new_h)
-                new_w = new_h = side
+                if self._resize_edge == "right":
+                    new_h = new_w
+                elif self._resize_edge == "bottom":
+                    new_w = new_h
+                else:  # corner
+                    side = new_w if abs(delta.x()) >= abs(delta.y()) else new_h
+                    new_w = new_h = side
             self.resize(new_w, new_h)
             return
 
