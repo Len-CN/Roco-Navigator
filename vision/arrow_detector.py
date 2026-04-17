@@ -19,9 +19,13 @@ class ArrowDetector:
     """检测小地图中心的黄色箭头朝向"""
 
     def __init__(self):
-        # Yellow arrow HSV range (收紧范围，减少地图黄色元素误检)
+        # Yellow arrow HSV range
         self._lower_yellow = np.array([15, 100, 180])
         self._upper_yellow = np.array([35, 255, 255])
+
+        # White outline HSV range (低饱和 + 高亮度)
+        self._lower_white = np.array([0, 0, 190])
+        self._upper_white = np.array([180, 60, 255])
 
         # Minimum pixel count to consider a valid arrow detection
         self._min_arrow_pixels = 15
@@ -61,34 +65,45 @@ class ArrowDetector:
         # 预模糊降噪，减少 HSV 阈值化后的碎片轮廓
         blurred = cv2.GaussianBlur(center_crop, (5, 5), 0)
 
-        # Convert to HSV and threshold for yellow
+        # Convert to HSV
         hsv = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)
-        mask = cv2.inRange(hsv, self._lower_yellow, self._upper_yellow)
 
         # 圆形遮罩：抑制裁剪区域边角的地图元素
-        crop_h, crop_w = mask.shape[:2]
+        crop_h, crop_w = hsv.shape[:2]
         crop_size = min(crop_h, crop_w)
         if crop_size not in self._crop_mask_cache:
             cmask = np.zeros((crop_h, crop_w), dtype=np.uint8)
             cv2.circle(cmask, (crop_w // 2, crop_h // 2), crop_size // 2, 255, -1)
             self._crop_mask_cache[crop_size] = cmask
         circle_mask = self._crop_mask_cache[crop_size]
-        mask = cv2.bitwise_and(mask, circle_mask)
 
-        # 自适应饱和度：地图偏黄时逐步收紧饱和度下限，隔离高饱和箭头
-        circle_pixels = max(1, cv2.countNonZero(circle_mask))
-        yellow_ratio = cv2.countNonZero(mask) / circle_pixels
-        if yellow_ratio > 0.25:
-            for sat_boost in (40, 80, 120):
-                tighter = self._lower_yellow.copy()
-                tighter[1] = min(255, self._lower_yellow[1] + sat_boost)
-                mask = cv2.inRange(hsv, tighter, self._upper_yellow)
-                mask = cv2.bitwise_and(mask, circle_mask)
-                if cv2.countNonZero(mask) / circle_pixels < 0.25:
-                    break
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+
+        # ── 白色描边检测 → 限定箭头区域 ──
+        white_mask = cv2.inRange(hsv, self._lower_white, self._upper_white)
+        white_mask = cv2.bitwise_and(white_mask, circle_mask)
+        white_pixels = cv2.countNonZero(white_mask)
+
+        # 黄色检测
+        yellow_mask = cv2.inRange(hsv, self._lower_yellow, self._upper_yellow)
+        yellow_mask = cv2.bitwise_and(yellow_mask, circle_mask)
+
+        if white_pixels > 5:
+            # 有白色描边 → 膨胀描边覆盖箭头内部，用作围栏
+            white_zone = cv2.dilate(white_mask, kernel, iterations=3)
+            # 只保留白色描边附近的黄色（过滤掉背景黄）
+            gated_yellow = cv2.bitwise_and(yellow_mask, white_zone)
+            if cv2.countNonZero(gated_yellow) >= self._min_arrow_pixels:
+                # 箭头 = 围栏内黄色 + 白色描边本身（完整轮廓）
+                mask = cv2.bitwise_or(gated_yellow, white_mask)
+            else:
+                # 白色检测不完整，回退到自适应饱和度
+                mask = self._adaptive_yellow(hsv, yellow_mask, circle_mask)
+        else:
+            # 无白色描边可见，用自适应饱和度
+            mask = self._adaptive_yellow(hsv, yellow_mask, circle_mask)
 
         # Morphological cleanup
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
 
@@ -131,6 +146,19 @@ class ArrowDetector:
 
         # Apply smoothing
         return self._smooth_angle(angle)
+
+    def _adaptive_yellow(self, hsv, yellow_mask, circle_mask):
+        """自适应饱和度回退：地图偏黄时逐步收紧饱和度下限"""
+        circle_pixels = max(1, cv2.countNonZero(circle_mask))
+        if cv2.countNonZero(yellow_mask) / circle_pixels > 0.25:
+            for sat_boost in (40, 80, 120):
+                tighter = self._lower_yellow.copy()
+                tighter[1] = min(255, self._lower_yellow[1] + sat_boost)
+                yellow_mask = cv2.inRange(hsv, tighter, self._upper_yellow)
+                yellow_mask = cv2.bitwise_and(yellow_mask, circle_mask)
+                if cv2.countNonZero(yellow_mask) / circle_pixels < 0.25:
+                    break
+        return yellow_mask
 
     def _find_arrow_direction(self, contour: np.ndarray) -> Optional[float]:
         """
