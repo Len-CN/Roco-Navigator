@@ -82,6 +82,10 @@ class ArrowDetector:
         # ── 白色描边检测 → 限定箭头区域 ──
         white_mask = cv2.inRange(hsv, self._lower_white, self._upper_white)
         white_mask = cv2.bitwise_and(white_mask, circle_mask)
+        # 形态学薄线提取：剥离白色扇形视野锥（填充厚块），保留箭头描边（细线）
+        thick_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        fan_mask = cv2.morphologyEx(white_mask, cv2.MORPH_OPEN, thick_kernel)
+        white_mask = cv2.subtract(white_mask, fan_mask)
         white_pixels = cv2.countNonZero(white_mask)
 
         # 黄色检测
