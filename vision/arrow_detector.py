@@ -72,7 +72,20 @@ class ArrowDetector:
             cmask = np.zeros((crop_h, crop_w), dtype=np.uint8)
             cv2.circle(cmask, (crop_w // 2, crop_h // 2), crop_size // 2, 255, -1)
             self._crop_mask_cache[crop_size] = cmask
-        mask = cv2.bitwise_and(mask, self._crop_mask_cache[crop_size])
+        circle_mask = self._crop_mask_cache[crop_size]
+        mask = cv2.bitwise_and(mask, circle_mask)
+
+        # 自适应饱和度：地图偏黄时逐步收紧饱和度下限，隔离高饱和箭头
+        circle_pixels = max(1, cv2.countNonZero(circle_mask))
+        yellow_ratio = cv2.countNonZero(mask) / circle_pixels
+        if yellow_ratio > 0.25:
+            for sat_boost in (40, 80, 120):
+                tighter = self._lower_yellow.copy()
+                tighter[1] = min(255, self._lower_yellow[1] + sat_boost)
+                mask = cv2.inRange(hsv, tighter, self._upper_yellow)
+                mask = cv2.bitwise_and(mask, circle_mask)
+                if cv2.countNonZero(mask) / circle_pixels < 0.25:
+                    break
 
         # Morphological cleanup
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
