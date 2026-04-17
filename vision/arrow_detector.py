@@ -1,12 +1,12 @@
 """
 玩家朝向检测
 
-从小地图中心区域提取黄色箭头，通过凸包尖端分析计算朝向角度。
+从小地图中心区域提取箭头，通过精确颜色匹配 + 凸包尖端分析计算朝向角度。
 """
 
 import logging
 import math
-from typing import Optional, Tuple, List
+from typing import Optional, Tuple
 from collections import deque
 
 import cv2
@@ -16,16 +16,14 @@ logger = logging.getLogger(__name__)
 
 
 class ArrowDetector:
-    """检测小地图中心的黄色箭头朝向"""
+    """检测小地图中心的玩家箭头朝向"""
 
     def __init__(self):
-        # Yellow arrow HSV range
-        self._lower_yellow = np.array([15, 100, 180])
-        self._upper_yellow = np.array([35, 255, 255])
-
-        # White outline HSV range (低饱和 + 高亮度)
-        self._lower_white = np.array([0, 0, 190])
-        self._upper_white = np.array([180, 60, 255])
+        # 箭头的两种精确颜色 (BGR 格式)
+        self._arrow_color1 = np.array([48, 183, 254], dtype=np.int16)   # RGB(254,183,48)
+        self._arrow_color2 = np.array([26, 139, 231], dtype=np.int16)   # RGB(231,139,26)
+        # 颜色容差 (L1 距离，三通道绝对差之和)
+        self._color_tolerance = 80
 
         # Minimum pixel count to consider a valid arrow detection
         self._min_arrow_pixels = 15
@@ -41,9 +39,6 @@ class ArrowDetector:
         """
         Detect player arrow direction from minimap image.
 
-        Uses convex hull tip detection for robust direction finding,
-        with angle smoothing to reduce jitter.
-
         Args:
             minimap_bgr: Full minimap BGR image
 
@@ -53,7 +48,7 @@ class ArrowDetector:
         """
         h, w = minimap_bgr.shape[:2]
 
-        # 缩小裁剪区域 (//8)，聚焦箭头本体，减少地图元素干扰
+        # 缩小裁剪区域 (//8)，聚焦箭头本体
         size = min(h, w) // 8
         cy, cx = h // 2, w // 2
         y1 = max(0, cy - size)
@@ -62,14 +57,11 @@ class ArrowDetector:
         x2 = min(w, cx + size)
         center_crop = minimap_bgr[y1:y2, x1:x2]
 
-        # 预模糊降噪，减少 HSV 阈值化后的碎片轮廓
+        # 预模糊降噪
         blurred = cv2.GaussianBlur(center_crop, (5, 5), 0)
 
-        # Convert to HSV
-        hsv = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)
-
-        # 圆形遮罩：抑制裁剪区域边角的地图元素
-        crop_h, crop_w = hsv.shape[:2]
+        # 圆形遮罩
+        crop_h, crop_w = blurred.shape[:2]
         crop_size = min(crop_h, crop_w)
         if crop_size not in self._crop_mask_cache:
             cmask = np.zeros((crop_h, crop_w), dtype=np.uint8)
@@ -77,43 +69,23 @@ class ArrowDetector:
             self._crop_mask_cache[crop_size] = cmask
         circle_mask = self._crop_mask_cache[crop_size]
 
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-
-        # ── 白色描边检测 → 限定箭头区域 ──
-        white_mask = cv2.inRange(hsv, self._lower_white, self._upper_white)
-        white_mask = cv2.bitwise_and(white_mask, circle_mask)
-        # 形态学薄线提取：剥离白色扇形视野锥（填充厚块），保留箭头描边（细线）
-        thick_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-        fan_mask = cv2.morphologyEx(white_mask, cv2.MORPH_OPEN, thick_kernel)
-        white_mask = cv2.subtract(white_mask, fan_mask)
-        white_pixels = cv2.countNonZero(white_mask)
-
-        # 黄色检测
-        yellow_mask = cv2.inRange(hsv, self._lower_yellow, self._upper_yellow)
-        yellow_mask = cv2.bitwise_and(yellow_mask, circle_mask)
-
-        if white_pixels > 5:
-            # 有白色描边 → 膨胀描边覆盖箭头内部，用作围栏
-            white_zone = cv2.dilate(white_mask, kernel, iterations=3)
-            # 只保留白色描边附近的黄色（过滤掉背景黄）
-            gated_yellow = cv2.bitwise_and(yellow_mask, white_zone)
-            if cv2.countNonZero(gated_yellow) >= self._min_arrow_pixels:
-                # 箭头 = 围栏内黄色 + 白色描边本身（完整轮廓）
-                mask = cv2.bitwise_or(gated_yellow, white_mask)
-            else:
-                # 白色检测不完整，回退到自适应饱和度
-                mask = self._adaptive_yellow(hsv, yellow_mask, circle_mask)
-        else:
-            # 无白色描边可见，用自适应饱和度
-            mask = self._adaptive_yellow(hsv, yellow_mask, circle_mask)
+        # ── 精确颜色匹配：计算每个像素到两种箭头颜色的 L1 距离 ──
+        pixels = blurred.astype(np.int16)
+        dist1 = np.sum(np.abs(pixels - self._arrow_color1), axis=2)
+        dist2 = np.sum(np.abs(pixels - self._arrow_color2), axis=2)
+        # 取到两种颜色中较近的距离
+        min_dist = np.minimum(dist1, dist2)
+        # 容差内的像素 = 箭头
+        mask = (min_dist <= self._color_tolerance).astype(np.uint8) * 255
+        mask = cv2.bitwise_and(mask, circle_mask)
 
         # Morphological cleanup
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
         mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
 
         # Check minimum pixel count
-        yellow_pixels = cv2.countNonZero(mask)
-        if yellow_pixels < self._min_arrow_pixels:
+        if cv2.countNonZero(mask) < self._min_arrow_pixels:
             return self._last_valid_angle
 
         # Find contours
@@ -127,69 +99,47 @@ class ArrowDetector:
         if area < self._min_arrow_pixels:
             return self._last_valid_angle
 
-        # 轮廓形状验证：面积不应超过裁剪区的 50%（否则是大面积黄色误检）
+        # 面积上限：不应超过裁剪区的 50%
         crop_area = (y2 - y1) * (x2 - x1)
         if area > crop_area * 0.5:
-            logger.debug("Arrow rejected: contour area %d > 50%% of crop %d", area, crop_area)
             return self._last_valid_angle
 
-        # 最小外接矩形宽高比检查：箭头应有一定长宽比
+        # 宽高比检查：箭头有一定长宽比
         rect = cv2.minAreaRect(largest)
         rw, rh = rect[1]
         if rw > 0 and rh > 0:
             aspect = max(rw, rh) / min(rw, rh)
             if aspect < 1.2:
-                # 太接近正方形/圆形，不像箭头
-                logger.debug("Arrow rejected: aspect ratio %.2f < 1.2", aspect)
                 return self._last_valid_angle
 
-        # Find arrow tip using convex hull defect analysis
+        # 凸包尖端法求方向
         angle = self._find_arrow_direction(largest)
         if angle is None:
             return self._last_valid_angle
 
-        # Apply smoothing
         return self._smooth_angle(angle)
-
-    def _adaptive_yellow(self, hsv, yellow_mask, circle_mask):
-        """自适应饱和度回退：地图偏黄时逐步收紧饱和度下限"""
-        circle_pixels = max(1, cv2.countNonZero(circle_mask))
-        if cv2.countNonZero(yellow_mask) / circle_pixels > 0.25:
-            for sat_boost in (40, 80, 120):
-                tighter = self._lower_yellow.copy()
-                tighter[1] = min(255, self._lower_yellow[1] + sat_boost)
-                yellow_mask = cv2.inRange(hsv, tighter, self._upper_yellow)
-                yellow_mask = cv2.bitwise_and(yellow_mask, circle_mask)
-                if cv2.countNonZero(yellow_mask) / circle_pixels < 0.25:
-                    break
-        return yellow_mask
 
     def _find_arrow_direction(self, contour: np.ndarray) -> Optional[float]:
         """
-        Find arrow direction using farthest-convex-hull-vertex method.
+        质心→最远凸包顶点 = 箭头尖端方向。
 
-        箭头的质心偏向底部（像素密集区），尖端是距质心最远的凸包顶点。
-        比"最锐角"方法更鲁棒，不依赖精确的角度计算。
+        箭头质心偏向底部（像素密集区），尖端是距质心最远的凸包顶点。
         """
         pts = contour.reshape(-1, 2).astype(np.float32)
         if len(pts) < 5:
             return self._pca_fallback(pts)
 
-        # 用矩阵计算精确质心
         M = cv2.moments(contour)
         if M["m00"] < 1:
             return self._pca_fallback(pts)
         cx = M["m10"] / M["m00"]
         cy = M["m01"] / M["m00"]
 
-        # 凸包去噪
         hull = cv2.convexHull(contour, returnPoints=True)
         if hull is None or len(hull) < 3:
             return self._pca_fallback(pts)
 
         hull_pts = hull.reshape(-1, 2).astype(np.float32)
-
-        # 找距质心最远的凸包顶点 → 箭头尖端
         dx = hull_pts[:, 0] - cx
         dy = hull_pts[:, 1] - cy
         dists_sq = dx * dx + dy * dy
@@ -198,16 +148,13 @@ class ArrowDetector:
 
         dx_tip = tip[0] - cx
         dy_tip = tip[1] - cy
-
         if abs(dx_tip) < 0.5 and abs(dy_tip) < 0.5:
             return self._pca_fallback(pts)
 
-        # Convert to compass bearing (0=north/up, clockwise)
-        compass = (math.degrees(math.atan2(dx_tip, -dy_tip))) % 360
-        return compass
+        return (math.degrees(math.atan2(dx_tip, -dy_tip))) % 360
 
     def _pca_fallback(self, pts: np.ndarray) -> Optional[float]:
-        """PCA-based direction as fallback, with centroid-to-farthest-point disambiguation."""
+        """PCA 方向回退"""
         if len(pts) < 3:
             return None
 
@@ -220,27 +167,19 @@ class ArrowDetector:
         eigenvalues, eigenvectors = np.linalg.eigh(cov)
         principal = eigenvectors[:, np.argmax(eigenvalues)]
 
-        # Disambiguate using farthest point from centroid along principal axis
         projections = centered @ principal
-        # Use the direction toward the farthest projected point
         if abs(np.max(projections)) >= abs(np.min(projections)):
             direction = principal
         else:
             direction = -principal
 
-        dx, dy = direction[0], direction[1]
-        compass = (math.degrees(math.atan2(dx, -dy))) % 360
-        return compass
+        return (math.degrees(math.atan2(direction[0], -direction[1]))) % 360
 
     def _smooth_angle(self, raw_angle: float) -> float:
-        """
-        Smooth angle using exponential-weighted circular mean.
-        Filter out large jumps (> 120 degrees).
-        """
+        """指数权重圆周均值平滑，过滤 >120° 大跳变"""
         if self._last_valid_angle is not None:
             diff = ((raw_angle - self._last_valid_angle + 180) % 360) - 180
             if abs(diff) > 120:
-                # 大跳变 — 检测错误，沿用上次值
                 return self._last_valid_angle
 
         self._angle_history.append(raw_angle)
@@ -249,13 +188,11 @@ class ArrowDetector:
         if len(self._angle_history) < 2:
             return raw_angle
 
-        # 指数权重圆周均值 (最新帧权重最大)
         sin_sum = 0.0
         cos_sum = 0.0
         weight_sum = 0.0
-        n = len(self._angle_history)
         for i, a in enumerate(self._angle_history):
-            w = 2.0 ** i  # 指数权重: 1, 2, 4, 8, 16
+            w = 2.0 ** i
             sin_sum += w * math.sin(math.radians(a))
             cos_sum += w * math.cos(math.radians(a))
             weight_sum += w
@@ -265,10 +202,13 @@ class ArrowDetector:
         self._last_valid_angle = avg_angle
         return avg_angle
 
-    def set_hsv_range(self, lower: Tuple[int, int, int], upper: Tuple[int, int, int]):
-        """Adjust HSV range for arrow detection"""
-        self._lower_yellow = np.array(lower)
-        self._upper_yellow = np.array(upper)
+    def set_arrow_colors(self, color1_rgb: Tuple[int, int, int],
+                         color2_rgb: Tuple[int, int, int],
+                         tolerance: int = 80):
+        """调整箭头颜色 (RGB 格式)"""
+        self._arrow_color1 = np.array([color1_rgb[2], color1_rgb[1], color1_rgb[0]], dtype=np.int16)
+        self._arrow_color2 = np.array([color2_rgb[2], color2_rgb[1], color2_rgb[0]], dtype=np.int16)
+        self._color_tolerance = tolerance
 
     def reset(self):
         """Reset angle history"""
