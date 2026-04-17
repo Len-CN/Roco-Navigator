@@ -1,14 +1,17 @@
 """
 路线规划
 
-聚类 + 区域内 TSP 算法，适合游戏跑图资源收集。
+方向扫描 (Directional Sweep) 算法，适合游戏跑图资源收集。
+
+原则：单向推进、少回头、就近优先、散点顺路收割、
+      密集区连贯清扫、不跨地图乱跳、总路径最短且平滑。
 """
 
 import logging
 import math
 import time
-import random
-from typing import List, Tuple, Optional
+from typing import List, Tuple
+from statistics import median
 
 try:
     from ortools.constraint_solver import routing_enums_pb2, pywrapcp
@@ -35,19 +38,20 @@ class PathPlanner:
     """
     路线规划器
 
-    使用空间聚类 + 区域内 TSP 的两层算法。
+    默认使用方向扫描 (Directional Sweep) 算法：
+    1. PCA 确定点云主方向（扫描轴）
+    2. 沿扫描轴自适应分割条带
+    3. 蛇形遍历各条带（牛耕式覆盖）
+    4. 2-opt 局部优化消除交叉
 
-    流程:
-    1. K-Means 将点位分成空间簇
-    2. 最近邻对簇排序
-    3. 每个簇内用最近邻 + 2-opt 求解
-    4. 串联为最终路线
+    有 OR-Tools 时 auto 策略优先使用 OR-Tools。
     """
 
     def __init__(self, use_2opt: bool = True, max_iterations: int = 1000):
         self._use_2opt = use_2opt
         self._max_iterations = max_iterations
-        logger.info("PathPlanner initialized (2-opt=%s)", use_2opt)
+        logger.info("PathPlanner initialized (2-opt=%s, ortools=%s)",
+                     use_2opt, HAS_ORTOOLS)
 
     def plan_route(self, start: Tuple[float, float],
                    targets: List[Tuple[float, float]],
@@ -71,142 +75,191 @@ class PathPlanner:
         start_time = time.perf_counter()
 
         if strategy == "nearest":
-            # Fast: just NN, no optimization
-            route = self._nearest_neighbor(start, list(targets))
+            route = self._nn_route(start, list(targets))
+            if self._use_2opt:
+                route = self._optimize_2opt(route)
         elif strategy == "ortools" and HAS_ORTOOLS:
             route = self._solve_ortools(start, list(targets))
-        elif strategy == "auto" and HAS_ORTOOLS and len(targets) <= 500:
+        elif strategy == "auto" and HAS_ORTOOLS:
+            # 有 OR-Tools 时优先使用
             route = self._solve_ortools(start, list(targets))
         else:
-            # Default: cluster + NN + 2-opt
-            if len(targets) <= 20:
-                route = self._nearest_neighbor(start, list(targets))
+            # 无 OR-Tools 时使用方向扫描
+            if len(targets) <= 5:
+                route = self._nn_route(start, list(targets))
                 if self._use_2opt:
                     route = self._optimize_2opt(route)
             else:
-                route = self._cluster_route(start, list(targets))
+                route = self._sweep_route(start, list(targets))
 
         elapsed = time.perf_counter() - start_time
         dist = total_distance(route)
-        logger.info("Route planned: %d targets, %.0f distance, %.2fs (strategy=%s, ortools=%s)",
+        logger.info("Route planned: %d targets, %.0f distance, %.2fs "
+                     "(strategy=%s, ortools=%s)",
                      len(targets), dist, elapsed, strategy, HAS_ORTOOLS)
         return route
 
-    # ==================== Clustering ====================
+    # ==================== 方向扫描算法 ====================
 
-    def _cluster_route(self, start, targets):
-        """Cluster-based route planning"""
-        # Step 1: K-Means clustering
-        k = max(1, min(30, len(targets) // 15))
-        if k <= 1:
-            route = self._nearest_neighbor(start, targets)
-            if self._use_2opt:
-                route = self._optimize_2opt(route)
-            return route
+    def _sweep_route(self, start, targets):
+        """
+        方向扫描主算法
 
-        clusters = self._kmeans(targets, k)
+        沿点云主方向推进，蛇形扫描覆盖所有点位。
+        """
+        # Phase 1: 确定扫描方向
+        axis = self._compute_sweep_axis(start, targets)
+        perp = (-axis[1], axis[0])  # 垂直轴
 
-        # Step 2: Order clusters by nearest-neighbor from start
-        cluster_centers = []
-        for cluster in clusters:
-            if cluster:
-                cx = sum(p[0] for p in cluster) / len(cluster)
-                cy = sum(p[1] for p in cluster) / len(cluster)
-                cluster_centers.append((cx, cy))
-            else:
-                cluster_centers.append((0, 0))
+        # Phase 2: 自适应条带分割
+        strips = self._split_into_strips(targets, start, axis)
 
-        ordered_indices = self._order_clusters(start, cluster_centers)
+        # Phase 3: 蛇形遍历
+        route = self._serpentine_traverse(start, strips, perp)
 
-        # Step 3: Solve TSP within each cluster and concatenate
-        route = [start]
-        current = start
-        for idx in ordered_indices:
-            cluster = clusters[idx]
-            if not cluster:
-                continue
-            # Find nearest point in cluster to current position as entry
-            sub_route = self._nearest_neighbor(current, cluster)
-            if self._use_2opt and len(sub_route) <= 200:
-                sub_route = self._optimize_2opt(sub_route)
-            route.extend(sub_route[1:])  # skip the start (which is 'current')
-            current = route[-1]
+        # Phase 4: 2-opt 局部优化
+        if self._use_2opt:
+            route = self._optimize_2opt(route)
 
         return route
 
-    def _kmeans(self, points, k, max_iter=20):
-        """Simple K-Means clustering"""
-        # K-Means++ initialization
-        centroids = [random.choice(points)]
-        for _ in range(1, min(k, len(points))):
-            dists = [min(distance(p, c) for c in centroids) ** 2 for p in points]
-            total = sum(dists)
-            if total == 0:
-                break
-            probs = [d / total for d in dists]
-            cumulative = []
-            s = 0
-            for p_val in probs:
-                s += p_val
-                cumulative.append(s)
-            r = random.random()
-            for idx_c, c_val in enumerate(cumulative):
-                if r <= c_val:
-                    centroids.append(points[idx_c])
-                    break
+    def _compute_sweep_axis(self, start, targets):
+        """
+        PCA 计算主扫描方向。
+
+        Returns:
+            (ax, ay) 归一化方向向量，从起点端指向远端
+        """
+        n = len(targets)
+
+        # 质心
+        cx = sum(p[0] for p in targets) / n
+        cy = sum(p[1] for p in targets) / n
+
+        # 协方差矩阵
+        cov_xx = sum((p[0] - cx) ** 2 for p in targets) / n
+        cov_xy = sum((p[0] - cx) * (p[1] - cy) for p in targets) / n
+        cov_yy = sum((p[1] - cy) ** 2 for p in targets) / n
+
+        # 2x2 矩阵的特征值/特征向量（解析解）
+        trace = cov_xx + cov_yy
+        det = cov_xx * cov_yy - cov_xy * cov_xy
+        discriminant = max(0, trace * trace / 4.0 - det)
+        sqrt_disc = math.sqrt(discriminant)
+
+        # 最大特征值对应的特征向量 = 主方向
+        lambda1 = trace / 2.0 + sqrt_disc
+
+        if abs(cov_xy) > 1e-9:
+            ax = lambda1 - cov_yy
+            ay = cov_xy
+        elif cov_xx >= cov_yy:
+            ax, ay = 1.0, 0.0
+        else:
+            ax, ay = 0.0, 1.0
+
+        # 归一化
+        length = math.sqrt(ax * ax + ay * ay)
+        if length < 1e-9:
+            ax, ay = 1.0, 0.0
+        else:
+            ax /= length
+            ay /= length
+
+        # 确保方向从起点指向质心（起点在低端）
+        to_center_x = cx - start[0]
+        to_center_y = cy - start[1]
+        dot = ax * to_center_x + ay * to_center_y
+        if dot < 0:
+            ax, ay = -ax, -ay
+
+        return (ax, ay)
+
+    def _split_into_strips(self, targets, start, axis):
+        """
+        沿扫描轴自适应分割条带。
+
+        用间距中位数的 2 倍作为分割阈值，
+        间距大的地方切开，间距小的地方合并。
+
+        Returns:
+            List[List[Tuple]] — 按扫描方向排序的条带列表
+        """
+        ax, ay = axis
+
+        # 计算每个点在扫描轴上的投影
+        projected = []
+        for p in targets:
+            proj = (p[0] - start[0]) * ax + (p[1] - start[1]) * ay
+            projected.append((proj, p))
+
+        # 按投影值排序
+        projected.sort(key=lambda x: x[0])
+
+        # 计算相邻点的间距
+        gaps = []
+        for i in range(1, len(projected)):
+            gap = projected[i][0] - projected[i - 1][0]
+            gaps.append(gap)
+
+        if not gaps:
+            return [[p for _, p in projected]]
+
+        # 自适应阈值：间距中位数的 2 倍
+        gap_threshold = median(gaps) * 2.0
+        # 至少保证一个最小值，避免所有点都被分开
+        gap_threshold = max(gap_threshold, 20.0)
+
+        # 按间距分割条带
+        strips = []
+        current_strip = [projected[0][1]]
+
+        for i in range(1, len(projected)):
+            if gaps[i - 1] > gap_threshold:
+                strips.append(current_strip)
+                current_strip = [projected[i][1]]
             else:
-                centroids.append(points[-1])
-        clusters = [[] for _ in range(k)]
+                current_strip.append(projected[i][1])
 
-        for _ in range(max_iter):
-            # Assign points to nearest centroid
-            clusters = [[] for _ in range(k)]
-            for p in points:
-                min_dist = float('inf')
-                min_idx = 0
-                for i, c in enumerate(centroids):
-                    d = distance(p, c)
-                    if d < min_dist:
-                        min_dist = d
-                        min_idx = i
-                clusters[min_idx].append(p)
+        if current_strip:
+            strips.append(current_strip)
 
-            # Update centroids
-            new_centroids = []
-            converged = True
-            for i, cluster in enumerate(clusters):
-                if cluster:
-                    cx = sum(p[0] for p in cluster) / len(cluster)
-                    cy = sum(p[1] for p in cluster) / len(cluster)
-                    new_c = (cx, cy)
-                    if distance(new_c, centroids[i]) > 1.0:
-                        converged = False
-                    new_centroids.append(new_c)
-                else:
-                    new_centroids.append(centroids[i])
+        return strips
 
-            centroids = new_centroids
-            if converged:
-                break
+    def _serpentine_traverse(self, start, strips, perp):
+        """
+        蛇形遍历所有条带。
 
-        return clusters
+        奇数条带沿垂直轴正向排序，偶数条带反向排序，
+        形成牛耕式 (boustrophedon) 路径。
+        """
+        px, py = perp
+        route = [start]
 
-    def _order_clusters(self, start, centers):
-        """Order cluster centers by nearest neighbor from start"""
-        ordered = []
-        remaining = list(range(len(centers)))
-        current = start
-        while remaining:
-            nearest_idx = min(remaining, key=lambda i: distance(current, centers[i]))
-            ordered.append(nearest_idx)
-            remaining.remove(nearest_idx)
-            current = centers[nearest_idx]
-        return ordered
+        for i, strip in enumerate(strips):
+            # 沿垂直轴的投影排序
+            strip_sorted = sorted(
+                strip,
+                key=lambda p: p[0] * px + p[1] * py,
+                reverse=(i % 2 == 1)
+            )
 
-    # ==================== TSP Solvers ====================
+            # 条带入口优化：如果条带反向排列后入口更近，就翻转
+            if len(route) > 0 and len(strip_sorted) > 1:
+                last = route[-1]
+                d_first = distance(last, strip_sorted[0])
+                d_last = distance(last, strip_sorted[-1])
+                if d_last < d_first:
+                    strip_sorted.reverse()
 
-    def _nearest_neighbor(self, start, targets):
-        """Nearest neighbor heuristic"""
+            route.extend(strip_sorted)
+
+        return route
+
+    # ==================== 最近邻 ====================
+
+    def _nn_route(self, start, targets):
+        """最近邻贪心算法（小规模回退用）"""
         route = [start]
         remaining = set(range(len(targets)))
         current = start
@@ -217,8 +270,10 @@ class PathPlanner:
             current = targets[nearest_idx]
         return route
 
+    # ==================== 2-opt 优化 ====================
+
     def _optimize_2opt(self, route, max_time=2.0):
-        """2-opt optimization with O(1) delta computation"""
+        """2-opt 优化，O(1) delta 计算"""
         if len(route) < 4:
             return route
 
@@ -236,8 +291,6 @@ class PathPlanner:
 
             for i in range(1, len(best) - 2):
                 for j in range(i + 2, len(best)):
-                    # O(1) delta computation
-                    # Current edges: (i-1, i) and (j, j+1 if exists)
                     d_old = distance(best[i - 1], best[i])
                     d_new = distance(best[i - 1], best[j])
 
@@ -246,7 +299,6 @@ class PathPlanner:
                         d_new += distance(best[i], best[j + 1])
 
                     if d_new < d_old - 0.001:
-                        # Reverse segment [i, j]
                         best[i:j + 1] = best[i:j + 1][::-1]
                         improved = True
                         break
@@ -255,12 +307,14 @@ class PathPlanner:
 
         return best
 
+    # ==================== OR-Tools ====================
+
     def _solve_ortools(self, start, targets):
-        """Solve TSP using Google Or-Tools (optimal for < 1000 points)."""
+        """Google OR-Tools 求解（有 OR-Tools 时的最优解）"""
         all_points = [start] + list(targets)
         n = len(all_points)
 
-        # Build distance matrix
+        # 构建距离矩阵
         dist_matrix = [[0] * n for _ in range(n)]
         for i in range(n):
             for j in range(n):
@@ -278,7 +332,6 @@ class PathPlanner:
         transit_id = routing.RegisterTransitCallback(dist_callback)
         routing.SetArcCostEvaluatorOfAllVehicles(transit_id)
 
-        # Search parameters
         search_params = pywrapcp.DefaultRoutingSearchParameters()
         search_params.first_solution_strategy = (
             routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
@@ -286,19 +339,14 @@ class PathPlanner:
         search_params.local_search_metaheuristic = (
             routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
         )
-        # Time limit: scale with problem size
         time_limit = min(10, max(1, n // 50))
         search_params.time_limit.FromSeconds(time_limit)
 
         solution = routing.SolveWithParameters(search_params)
         if solution is None:
-            logger.warning("Or-Tools failed, falling back to NN+2-opt")
-            route = self._nearest_neighbor(start, list(targets))
-            if self._use_2opt:
-                route = self._optimize_2opt(route)
-            return route
+            logger.warning("OR-Tools failed, falling back to sweep")
+            return self._sweep_route(start, list(targets))
 
-        # Extract route
         route = []
         index = routing.Start(0)
         while not routing.IsEnd(index):

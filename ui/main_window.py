@@ -453,10 +453,11 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "提示", "当前筛选条件下没有资源点。")
             return
 
-        if len(resources) > 500:
+        max_points = self._settings.get("navigation.max_route_points", 500)
+        if len(resources) > max_points:
             QMessageBox.information(self, "提示",
-                                    f"当前筛选有 {len(resources)} 个点位，数量过多。\n"
-                                    "请选择具体的资源类型进行规划。")
+                                    f"当前筛选有 {len(resources)} 个点位，超过上限 {max_points}。\n"
+                                    "请选择具体的资源类型，或在设置→性能中调整上限。")
             return
 
         self._sidebar.set_nav_progress(0, "正在规划路线...")

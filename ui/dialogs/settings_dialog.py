@@ -227,6 +227,22 @@ class SettingsDialog(QDialog):
         caption.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px;")
         layout.addWidget(caption)
 
+        layout.addWidget(NeumorphicSeparator())
+
+        # Max route points
+        self._max_route_points = QSpinBox()
+        self._max_route_points.setRange(50, 2000)
+        self._max_route_points.setSingleStep(50)
+        self._max_route_points.setValue(self._settings.get("navigation.max_route_points", 500))
+        layout.addLayout(self._create_row("最大规划点数", self._max_route_points))
+
+        caption2 = NeumorphicLabel(
+            "规划路线时最大允许的资源点数量。点位越多计算越慢。",
+            level="body",
+        )
+        caption2.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px;")
+        layout.addWidget(caption2)
+
         layout.addStretch()
         return w
 
@@ -248,9 +264,9 @@ class SettingsDialog(QDialog):
         self._strategy = NeumorphicComboBox()
         self._strategy.addItems(["自动", "最近邻", "OR-Tools"])
         self._strategy.setToolTip(
-            "auto: 有 Or-Tools 时自动使用最优算法，否则用 2-opt\n"
-            "nearest: 最近邻 (最快，路线较差)\n"
-            "ortools: Google Or-Tools (最优，需安装)"
+            "自动: 有 OR-Tools 时优先使用，否则用方向扫描算法\n"
+            "最近邻: 贪心最近点 (最快，路线较差)\n"
+            "OR-Tools: Google OR-Tools 最优求解 (需安装)"
         )
         strategy_reverse = {"auto": "自动", "nearest": "最近邻", "ortools": "OR-Tools"}
         current = self._settings.get("navigation.route_strategy", "nearest")
@@ -530,6 +546,7 @@ class SettingsDialog(QDialog):
         strategy_text = self._strategy.currentText()
         self._settings.set("navigation.route_strategy", strategy_map.get(strategy_text, "auto"))
         self._settings.set("navigation.use_2opt", self._use_2opt.isChecked())
+        self._settings.set("navigation.max_route_points", self._max_route_points.value())
         self._settings.save()
         logger.info("Settings saved")
         self.settings_changed.emit()
