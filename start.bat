@@ -38,11 +38,14 @@ if not exist "venv\Scripts\python.exe" (
     echo.
 )
 
-venv\Scripts\python.exe -c "import cv2" >nul 2>&1
+venv\Scripts\python.exe -c "import PyQt5; import numpy; import mss; import cv2" >nul 2>&1
 if errorlevel 1 (
-    echo [*] Fixing OpenCV...
-    venv\Scripts\pip.exe uninstall opencv-contrib-python -y >nul 2>&1
-    venv\Scripts\pip.exe install opencv-python>=4.8.0
+    echo [*] Fixing missing dependencies...
+    venv\Scripts\pip.exe install -r requirements.txt
+    if errorlevel 1 (
+        echo [ERROR] Dependency installation failed
+        goto :eof
+    )
 )
 
 echo [*] Starting...
