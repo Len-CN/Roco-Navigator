@@ -378,7 +378,7 @@ def main():
     def progress(msg):
         print(f"  {msg}")
     
-    success, log = manager.install_package("opencv-cpu", progress)
+    success, log = manager.install_package("opencv", progress)
     print(f"安装结果: {'成功' if success else '失败'}")
 
 

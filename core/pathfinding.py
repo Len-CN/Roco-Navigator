@@ -84,11 +84,9 @@ class PathPlanner:
             # 有 OR-Tools 时优先使用
             route = self._solve_ortools(start, list(targets))
         else:
-            # 无 OR-Tools 时使用方向扫描
-            if len(targets) <= 5:
+            # 无 OR-Tools 时使用方向扫描（≤2 个点时最近邻即最优）
+            if len(targets) <= 2:
                 route = self._nn_route(start, list(targets))
-                if self._use_2opt:
-                    route = self._optimize_2opt(route)
             else:
                 route = self._sweep_route(start, list(targets))
 

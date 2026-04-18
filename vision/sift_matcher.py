@@ -210,7 +210,7 @@ class SIFTMatcher:
         # 7. Homography 质量验证
         map_h, map_w = map_region.shape[:2]
         if not self._validate_homography(H, inliers, len(good_matches),
-                                         (map_h, map_w + region_offset[0]),
+                                         (map_h, map_w),
                                          world_x, world_y):
             return MatchResult(success=False, good_matches=len(good_matches),
                                inliers=inliers)

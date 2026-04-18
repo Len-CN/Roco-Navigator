@@ -120,9 +120,11 @@ class ImageProcessor:
         size = min(h, w)
         mask = self.create_ring_mask(size, outer_ratio, inner_ratio)
 
-        # 如果图像不是正方形，裁剪遮罩
+        # 如果图像不是正方形，将遮罩嵌入目标尺寸的空白 mask
         if h != w:
-            mask = mask[:h, :w]
+            new_mask = np.zeros((h, w), dtype=np.uint8)
+            new_mask[:size, :size] = mask
+            mask = new_mask
 
         if len(image.shape) == 3:
             return cv2.bitwise_and(image, image, mask=mask)
