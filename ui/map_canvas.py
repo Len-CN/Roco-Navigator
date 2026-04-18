@@ -26,6 +26,7 @@ class MapCanvas(QWidget):
     # 信号
     position_clicked = pyqtSignal(float, float)  # 点击地图上的位置
     region_selected = pyqtSignal(float, float, float, float)  # x1, y1, x2, y2 in world coords
+    waypoint_skip_requested = pyqtSignal(int)     # 双击路线点请求跳转
 
     # 缩放限制
     MIN_ZOOM = 0.1
@@ -482,6 +483,13 @@ class MapCanvas(QWidget):
             self._offset_x = self._last_offset.x() + delta.x()
             self._offset_y = self._last_offset.y() + delta.y()
             self.update()
+            return
+        # 悬停路线点时显示指针光标
+        if self._route_points:
+            if self._is_near_waypoint(event.pos().x(), event.pos().y()):
+                self.setCursor(Qt.PointingHandCursor)
+            else:
+                self.setCursor(Qt.ArrowCursor)
 
     def mouseReleaseEvent(self, event: QMouseEvent):
         if self._selecting_region and event.button() == Qt.LeftButton and self._sel_start is not None:
@@ -508,6 +516,35 @@ class MapCanvas(QWidget):
         super().resizeEvent(event)
         if self._map_image and self._zoom < self.MIN_ZOOM:
             self.fit_to_view()
+
+    def mouseDoubleClickEvent(self, event: QMouseEvent):
+        if event.button() == Qt.LeftButton:
+            self._check_waypoint_click(event.pos().x(), event.pos().y())
+        else:
+            super().mouseDoubleClickEvent(event)
+
+    def _is_near_waypoint(self, sx: float, sy: float, radius: int = 12) -> bool:
+        """判断屏幕坐标是否在某个路线点范围内"""
+        r2 = radius * radius
+        for pt in self._route_points:
+            sp = self.world_to_screen(pt.x(), pt.y())
+            dx, dy = sx - sp.x(), sy - sp.y()
+            if dx * dx + dy * dy <= r2:
+                return True
+        return False
+
+    def _check_waypoint_click(self, sx: float, sy: float):
+        """找最近的路线点，若在 12px 内则发射跳转信号"""
+        RADIUS_SQ = 12 * 12
+        best_i, best_d = -1, RADIUS_SQ
+        for i, pt in enumerate(self._route_points):
+            sp = self.world_to_screen(pt.x(), pt.y())
+            dx, dy = sx - sp.x(), sy - sp.y()
+            d = dx * dx + dy * dy
+            if d <= best_d:
+                best_d, best_i = d, i
+        if best_i >= 0:
+            self.waypoint_skip_requested.emit(best_i)
 
     def keyPressEvent(self, event):
         if self._selecting_region and event.key() == Qt.Key_Escape:

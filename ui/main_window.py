@@ -306,6 +306,7 @@ class MainWindow(QMainWindow):
         self._map_canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self._map_canvas.position_clicked.connect(self._on_map_clicked)
         self._map_canvas.region_selected.connect(self._on_region_selected)
+        self._map_canvas.waypoint_skip_requested.connect(self._on_waypoint_skip_requested)
         content_layout.addWidget(self._map_canvas, stretch=1)
 
         main_layout.addWidget(content, stretch=1)
@@ -519,6 +520,17 @@ class MainWindow(QMainWindow):
             [(p.x(), p.y()) for p in self._map_canvas._route_points],
             current_index=index + 1,
             visited=self._navigator.visited_indices
+        )
+
+    def _on_waypoint_skip_requested(self, index: int):
+        """用户双击路线点，跳转到该点（之前所有未到达目标标记为已到达）"""
+        if not self._navigator.is_active:
+            return
+        self._navigator.jump_to(index)
+        self._map_canvas.set_route(
+            [(p.x(), p.y()) for p in self._map_canvas._route_points],
+            current_index=self._navigator.current_index,
+            visited=self._navigator.visited_indices,
         )
 
     def _on_navigation_complete(self):

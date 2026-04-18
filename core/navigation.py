@@ -133,6 +133,20 @@ class Navigator:
         if self._state == NavigationState.NAVIGATING:
             self._advance_target()
 
+    def jump_to(self, index: int):
+        """跳转到指定路线点，将之前所有未访问目标标记为已到达"""
+        if self._state != NavigationState.NAVIGATING:
+            return
+        if index < 1 or index >= len(self._route):
+            return
+        if index <= self._current_index:
+            return
+        for i in range(self._current_index, index):
+            self._visited.add(i)
+        self._current_index = index
+        logger.info("Jumped to target %d/%d, marked %d targets as visited",
+                    index, len(self._route) - 1, index - 1)
+
     # ==================== 更新 ====================
 
     def update(self, player_x: float, player_y: float) -> NavigationInfo:
@@ -278,6 +292,10 @@ class Navigator:
     @property
     def state(self) -> NavigationState:
         return self._state
+
+    @property
+    def current_index(self) -> int:
+        return self._current_index
 
     @property
     def current_target(self) -> Optional[Tuple[float, float]]:
