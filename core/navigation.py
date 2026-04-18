@@ -141,11 +141,12 @@ class Navigator:
             return
         if index <= self._current_index:
             return
+        skipped = index - self._current_index
         for i in range(self._current_index, index):
             self._visited.add(i)
         self._current_index = index
         logger.info("Jumped to target %d/%d, marked %d targets as visited",
-                    index, len(self._route) - 1, index - 1)
+                    index, len(self._route) - 1, skipped)
 
     # ==================== 更新 ====================
 

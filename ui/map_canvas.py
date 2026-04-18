@@ -484,6 +484,9 @@ class MapCanvas(QWidget):
             self._offset_y = self._last_offset.y() + delta.y()
             self.update()
             return
+        # 区域选择模式下保持 CrossCursor，不做悬停判断
+        if self._selecting_region:
+            return
         # 悬停路线点时显示指针光标
         if self._route_points:
             if self._is_near_waypoint(event.pos().x(), event.pos().y()):
