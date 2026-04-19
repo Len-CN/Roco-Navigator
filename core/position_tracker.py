@@ -17,9 +17,9 @@ from enum import Enum
 from dataclasses import dataclass
 from collections import deque
 
-from roco_navigator.core.screen_capture import ScreenCapture
-from roco_navigator.core.minimap_detector import MinimapDetector, DetectionResult
-from roco_navigator.data.map_manager import MapManager
+from .screen_capture import ScreenCapture
+from .minimap_detector import MinimapDetector, DetectionResult
+from ..data.map_manager import MapManager
 
 logger = logging.getLogger(__name__)
 

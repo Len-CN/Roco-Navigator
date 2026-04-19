@@ -8,11 +8,17 @@ Roco Navigator - 洛克王国导航辅助工具
 
 import sys
 import os
+import importlib
 
-# 确保项目根目录在 Python 路径中
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
+# 动态注册当前目录为包（无论目录叫什么名字）
+_pkg_dir = os.path.dirname(os.path.abspath(__file__))
+_pkg_name = os.path.basename(_pkg_dir)
+_parent_dir = os.path.dirname(_pkg_dir)
+if _parent_dir not in sys.path:
+    sys.path.insert(0, _parent_dir)
+if _pkg_name not in sys.modules:
+    importlib.import_module(_pkg_name)
+__package__ = _pkg_name
 
 # IMPORTANT: Import torch before PyQt5 to avoid DLL conflicts
 # PyQt5 and PyTorch both use different versions of some DLLs (like c10.dll)
@@ -23,9 +29,9 @@ try:
 except (ImportError, OSError):
     _TORCH_AVAILABLE = False
 
-from roco_navigator.utils.logger import setup_logger
-from roco_navigator.utils.gpu_utils import GPUManager
-from roco_navigator.config.settings import Settings
+from .utils.logger import setup_logger
+from .utils.gpu_utils import GPUManager
+from .config.settings import Settings
 
 
 def check_environment():
@@ -134,7 +140,13 @@ def main():
     
     # 启动 PyQt5 应用
     from PyQt5.QtWidgets import QApplication
-    from roco_navigator.ui.main_window import MainWindow
+    from .ui.main_window import MainWindow
+
+    # 中文路径下 Qt 可能找不到平台插件，手动指定插件目录
+    import PyQt5
+    qt_plugin_path = os.path.join(os.path.dirname(PyQt5.__file__), "Qt5", "plugins")
+    if os.path.isdir(qt_plugin_path):
+        os.environ["QT_PLUGIN_PATH"] = qt_plugin_path
 
     app = QApplication(sys.argv)
     app.setApplicationName("洛克导航")

@@ -12,7 +12,7 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, QPoint
 from PyQt5.QtGui import QColor, QFont, QMouseEvent
 
-from roco_navigator.ui.widgets.neumorphic import (
+from .neumorphic import (
     BG_SECONDARY, BG_PRIMARY, TEXT_PRIMARY, TEXT_SECONDARY,
     ACCENT, ERROR, apply_shadow
 )
@@ -42,7 +42,7 @@ class TitleBar(QWidget):
         layout.setSpacing(8)
 
         # 应用图标/状态指示
-        from roco_navigator.ui.widgets.neumorphic import StatusIndicator
+        from .neumorphic import StatusIndicator
         self._status = StatusIndicator()
         self._status.set_status("idle")
         layout.addWidget(self._status)

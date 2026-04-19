@@ -15,8 +15,8 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QProcess, QTimer
 
-from roco_navigator.config.settings import Settings
-from roco_navigator.ui.widgets.neumorphic import (
+from ...config.settings import Settings
+from ..widgets.neumorphic import (
     NeumorphicButton, NeumorphicCard, NeumorphicLabel,
     NeumorphicSlider, NeumorphicSeparator, NeumorphicProgress,
     NeumorphicComboBox,
@@ -556,7 +556,7 @@ class SettingsDialog(QDialog):
     def _open_dependency_manager(self):
         """打开依赖管理器"""
         try:
-            from roco_navigator.ui.dialogs.dependency_dialog import DependencyDialog
+            from .dependency_dialog import DependencyDialog
             
             dialog = DependencyDialog(self)
             dialog.exec_()

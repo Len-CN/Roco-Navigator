@@ -27,7 +27,7 @@ from PyQt5.QtGui import (
     QMouseEvent, QWheelEvent, QRegion
 )
 
-from roco_navigator.ui.widgets.neumorphic import (
+from .widgets.neumorphic import (
     BG_PRIMARY, BG_SECONDARY, TEXT_PRIMARY, TEXT_SECONDARY,
     ACCENT, SUCCESS, ERROR, SHADOW_DARK, SHADOW_LIGHT
 )

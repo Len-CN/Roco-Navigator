@@ -13,7 +13,7 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QFont
 
-from roco_navigator.ui.widgets.neumorphic import (
+from ..widgets.neumorphic import (
     NeumorphicButton, NeumorphicLabel, NeumorphicSeparator,
     BG_PRIMARY, BG_SECONDARY, BG_CARD, TEXT_PRIMARY,
     TEXT_SECONDARY, TEXT_DISABLED, ACCENT, SUCCESS

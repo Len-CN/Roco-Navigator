@@ -10,7 +10,7 @@ from typing import Optional, List, Tuple
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from roco_navigator.utils.file_utils import load_json, save_json, get_data_dir
+from ..utils.file_utils import load_json, save_json, get_data_dir
 
 logger = logging.getLogger(__name__)
 

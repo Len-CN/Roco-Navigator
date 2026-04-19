@@ -12,11 +12,11 @@ from typing import Optional, Tuple, List
 from dataclasses import dataclass, field
 from enum import Enum
 
-from roco_navigator.vision.image_processor import ImageProcessor
-from roco_navigator.vision.sift_matcher import SIFTMatcher, MatchResult
-from roco_navigator.vision.color_detector import ColorDetector, ColorDetectResult
-from roco_navigator.vision.template_matcher import TemplateMatcher
-from roco_navigator.vision.arrow_detector import ArrowDetector
+from ..vision.image_processor import ImageProcessor
+from ..vision.sift_matcher import SIFTMatcher, MatchResult
+from ..vision.color_detector import ColorDetector, ColorDetectResult
+from ..vision.template_matcher import TemplateMatcher
+from ..vision.arrow_detector import ArrowDetector
 
 logger = logging.getLogger(__name__)
 
@@ -480,7 +480,7 @@ class MinimapDetector:
         """
         if enabled:
             try:
-                from roco_navigator.vision.loftr_matcher import is_loftr_available, LoFTRMatcher
+                from ..vision.loftr_matcher import is_loftr_available, LoFTRMatcher
                 logger.info("LoFTR module imported successfully")
             except (ImportError, OSError, RuntimeError) as e:
                 logger.warning("Cannot import LoFTR module: %s", e)

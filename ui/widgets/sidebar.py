@@ -14,7 +14,7 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QFont
 
-from roco_navigator.ui.widgets.neumorphic import (
+from .neumorphic import (
     NeumorphicButton, NeumorphicCard, NeumorphicLabel,
     NeumorphicSeparator, NeumorphicProgress, NeumorphicComboBox,
     StatusIndicator,
@@ -22,7 +22,7 @@ from roco_navigator.ui.widgets.neumorphic import (
     TEXT_SECONDARY, TEXT_DISABLED, ACCENT, SUCCESS, WARNING, ERROR,
     apply_shadow
 )
-from roco_navigator.ui.dialogs.filter_dialog import FilterDialog
+from ..dialogs.filter_dialog import FilterDialog
 
 logger = logging.getLogger(__name__)
 

@@ -21,7 +21,7 @@ import requests
 from bs4 import BeautifulSoup
 from PIL import Image
 
-from roco_navigator.utils.file_utils import (
+from ..utils.file_utils import (
     get_data_dir, get_assets_dir, save_json, load_json, ensure_dir, backup_file
 )
 

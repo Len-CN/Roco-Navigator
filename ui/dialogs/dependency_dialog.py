@@ -11,8 +11,8 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from PyQt5.QtGui import QFont
 
-from roco_navigator.utils.package_manager import PackageManager
-from roco_navigator.ui.widgets.neumorphic import (
+from ...utils.package_manager import PackageManager
+from ..widgets.neumorphic import (
     NeumorphicButton, NeumorphicCard, NeumorphicLabel,
     NeumorphicProgress,
     BG_PRIMARY, BG_SECONDARY, TEXT_PRIMARY, TEXT_SECONDARY,

@@ -11,7 +11,7 @@ import numpy as np
 from typing import Optional, Tuple, List
 from dataclasses import dataclass
 
-from roco_navigator.utils.gpu_utils import get_gpu_manager
+from ..utils.gpu_utils import get_gpu_manager
 
 logger = logging.getLogger(__name__)
 

@@ -17,26 +17,26 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal, QRectF, QProcess
 from PyQt5.QtGui import QColor, QResizeEvent, QPainter, QPainterPath
 
-from roco_navigator.config.settings import Settings
-from roco_navigator.ui.widgets.title_bar import TitleBar
-from roco_navigator.ui.widgets.sidebar import Sidebar
-from roco_navigator.ui.map_canvas import MapCanvas
-from roco_navigator.ui.overlay_hud import OverlayHUD
-from roco_navigator.ui.widgets.neumorphic import (
+from ..config.settings import Settings
+from .widgets.title_bar import TitleBar
+from .widgets.sidebar import Sidebar
+from .map_canvas import MapCanvas
+from .overlay_hud import OverlayHUD
+from .widgets.neumorphic import (
     BG_PRIMARY, BG_SECONDARY, TEXT_SECONDARY
 )
 # Core modules
-from roco_navigator.core.screen_capture import ScreenCapture
-from roco_navigator.core.minimap_detector import MinimapDetector
-from roco_navigator.core.position_tracker import PositionTracker, TrackingState, TrackingConfig
-from roco_navigator.core.pathfinding import PathPlanner, total_distance
-from roco_navigator.core.navigation import Navigator, NavigationState
+from ..core.screen_capture import ScreenCapture
+from ..core.minimap_detector import MinimapDetector
+from ..core.position_tracker import PositionTracker, TrackingState, TrackingConfig
+from ..core.pathfinding import PathPlanner, total_distance
+from ..core.navigation import Navigator, NavigationState
 
 # Data modules
-from roco_navigator.data.map_manager import MapManager
-from roco_navigator.data.resource_manager import ResourceManager
-from roco_navigator.data.route_manager import RouteManager, Route
-from roco_navigator.data.wiki_updater import WikiUpdater
+from ..data.map_manager import MapManager
+from ..data.resource_manager import ResourceManager
+from ..data.route_manager import RouteManager, Route
+from ..data.wiki_updater import WikiUpdater
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +79,7 @@ class RouteWorker(QThread):
         self._strategy = strategy
 
     def run(self):
-        from roco_navigator.core.pathfinding import total_distance
+        from ..core.pathfinding import total_distance
         targets = [(r["x"], r["y"]) for r in self._resources]
         names = [r.get("name", "") for r in self._resources]
         route = self._planner.plan_route(self._start, targets, self._strategy)
@@ -334,7 +334,7 @@ class MainWindow(QMainWindow):
     def _on_calibrate(self):
         """打开小地图校准选择器"""
         logger.info("Calibrate minimap requested")
-        from roco_navigator.ui.widgets.minimap_selector import MinimapSelector
+        from .widgets.minimap_selector import MinimapSelector
 
         region = self._settings.get("minimap.region", {"x": 100, "y": 100, "width": 200, "height": 200})
         self._selector = MinimapSelector(
@@ -694,7 +694,7 @@ class MainWindow(QMainWindow):
         if not cache:
             return
 
-        from roco_navigator.data.resource_manager import Resource
+        from ..data.resource_manager import Resource
 
         points = cache.get("points", [])
         mark_type_map = {}
@@ -841,7 +841,7 @@ class MainWindow(QMainWindow):
 
     def _on_settings(self):
         """打开设置对话框"""
-        from roco_navigator.ui.dialogs.settings_dialog import SettingsDialog
+        from .dialogs.settings_dialog import SettingsDialog
         dialog = SettingsDialog(self._settings, self)
         dialog.settings_changed.connect(self._apply_settings)
         dialog.exec_()

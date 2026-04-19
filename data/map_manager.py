@@ -11,7 +11,7 @@ import numpy as np
 from typing import Optional, Tuple, List
 from dataclasses import dataclass
 
-from roco_navigator.utils.file_utils import get_assets_dir
+from ..utils.file_utils import get_assets_dir
 
 logger = logging.getLogger(__name__)
 
