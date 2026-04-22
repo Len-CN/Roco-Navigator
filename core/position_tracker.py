@@ -104,7 +104,7 @@ class PositionTracker:
         self._dt_history: deque = deque(maxlen=10)  # FPS 滑动窗口
 
         # 箭头检测降频 (每 2 帧检测一次，方向检测已优化)
-        self._arrow_detect_interval: int = 2
+        self._arrow_detect_interval: int = 1  # 每帧检测箭头方向
 
         # 性能优化: 高置信度帧跳过
         self._skip_counter: int = 0        # 连续跳过帧计数
@@ -171,24 +171,28 @@ class PositionTracker:
 
     # ==================== EMA 位置平滑 ====================
 
-    def _smooth_position(self, raw_x: float, raw_y: float) -> Tuple[float, float]:
+    def _smooth_position(self, raw_x: float, raw_y: float,
+                          confidence: float = 1.0) -> Tuple[float, float]:
         """
-        自适应 EMA 位置平滑（参考 Game-Map-Tracker）
+        置信度加权自适应 EMA 位置平滑
 
-        - 首次定位：直接赋值，不平滑
-        - dist > 500px：跳变/传送，直接接受不平滑
-        - dist < 15px：alpha=0.15（慢平滑，减少抖动）
-        - dist >= 15px：alpha=0.45（快跟随，跟上移动）
+        - 首次定位：直接赋值
+        - dist > 500px：传送，直接接受
+        - dist < 3px：死区，忽略（纯测量噪声）
+        - dist < 20px：慢平滑 alpha=0.12（减少抖动）
+        - dist >= 20px：快跟随 alpha=0.4
+
+        alpha 还会按置信度缩放：低置信度匹配对位置更新的影响更小。
 
         Args:
             raw_x: 原始 X 坐标
             raw_y: 原始 Y 坐标
+            confidence: 匹配置信度 [0, 1]
 
         Returns:
             平滑后的 (x, y) 坐标
         """
         if self._smoothed_x is None or self._smoothed_y is None:
-            # 首次定位，直接赋值
             self._smoothed_x = raw_x
             self._smoothed_y = raw_y
             return (raw_x, raw_y)
@@ -198,15 +202,22 @@ class PositionTracker:
         dist = (dx * dx + dy * dy) ** 0.5
 
         if dist > 500:
-            # 跳变/传送，直接接受不平滑
+            # 传送，直接接受
             self._smoothed_x = raw_x
             self._smoothed_y = raw_y
             return (raw_x, raw_y)
 
-        if dist < 15:
-            alpha = 0.15  # 慢平滑，减少抖动
+        if dist < 4:
+            # 死区：4px 以内视为测量噪声，不更新
+            return (self._smoothed_x, self._smoothed_y)
+
+        if dist < 25:
+            alpha = 0.10  # 慢平滑，减少抖动
         else:
-            alpha = 0.45  # 快跟随，跟上移动
+            alpha = 0.30  # 快跟随（降低以减少移动时抖动）
+
+        # 置信度加权：低置信度 → 更小 alpha → 更保守更新
+        alpha *= max(0.25, min(1.0, confidence))
 
         self._smoothed_x = alpha * raw_x + (1 - alpha) * self._smoothed_x
         self._smoothed_y = alpha * raw_y + (1 - alpha) * self._smoothed_y
@@ -266,21 +277,33 @@ class PositionTracker:
                 h, w = minimap_gray.shape[:2]
                 minimap_mask = self._detector._image_processor.create_ring_mask(
                     min(h, w), self._detector._ring_outer, self._detector._ring_inner)
+            # Step 1: SIFT 全局搜索
             result = self._detector._sift_matcher.match_precomputed(
                 minimap_gray, search_center=None, minimap_mask=minimap_mask)
-            if result.success and result.confidence > 0.15:
-                self._position = result.position
-                if result.position is not None:
-                    self._smoothed_x = result.position[0]
-                    self._smoothed_y = result.position[1]
-                self._confidence = result.confidence
+            scan_pos = result.position if result.success and result.confidence > 0.15 else None
+            scan_conf = result.confidence if scan_pos else 0.0
+
+            # Step 2: DISK+LG 全局搜索（SIFT 失败时）
+            if (scan_pos is None
+                    and self._detector._lightglue_matcher is not None
+                    and self._detector._lightglue_matcher.is_precomputed):
+                lg_result = self._detector._lightglue_matcher.match_precomputed(
+                    minimap_gray, search_center=None, minimap_mask=minimap_mask)
+                if lg_result.success and lg_result.confidence > 0.15:
+                    scan_pos = lg_result.position
+                    scan_conf = lg_result.confidence
+
+            if scan_pos is not None:
+                self._position = scan_pos
+                self._smoothed_x = scan_pos[0]
+                self._smoothed_y = scan_pos[1]
+                self._confidence = scan_conf
                 self._lost_frames = 0
                 self._change_state(TrackingState.PRECISE_TRACK)
                 self._notify_position()
                 return self._build_status(
-                    f"Global scan found: ({result.position[0]:.0f}, {result.position[1]:.0f})"
+                    f"Global scan found: ({scan_pos[0]:.0f}, {scan_pos[1]:.0f})"
                 )
-            # 预计算全局搜索失败 → 下一帧重试，不阻塞 UI
             return self._build_status("Global scan: no match, retrying next frame")
 
         # 非预计算模式: 分帧滑动窗口 (每帧只扫描一个窗口，不阻塞 UI)
@@ -370,6 +393,10 @@ class PositionTracker:
                 h, w = minimap_gray.shape[:2]
                 minimap_mask = self._detector._image_processor.create_ring_mask(
                     min(h, w), self._detector._ring_outer, self._detector._ring_inner)
+
+            matched = False
+
+            # Step 1: SIFT 预计算局部搜索（~5ms，任何模式都先跑）
             result_sift = self._detector._sift_matcher.match_precomputed(
                 minimap_gray,
                 search_center=self._position,
@@ -377,85 +404,83 @@ class PositionTracker:
                 minimap_mask=minimap_mask)
 
             if result_sift.success:
+                matched = True
+                match_pos = result_sift.position
+                match_conf = result_sift.confidence
+                match_label = f"Tracking: ({match_pos[0]:.0f}, {match_pos[1]:.0f}) conf={match_conf:.2f}"
+
+            # Step 2: DISK+LG 预计算局部搜索（仅 SIFT 失败 + LG 可用时）
+            if (not matched
+                    and self._detector._lightglue_matcher is not None
+                    and self._detector._lightglue_matcher.is_precomputed):
+                lg_result = self._detector._lightglue_matcher.match_precomputed(
+                    minimap_gray,
+                    search_center=self._position,
+                    search_radius=radius,
+                    minimap_mask=minimap_mask)
+                if lg_result.success:
+                    matched = True
+                    match_pos = lg_result.position
+                    match_conf = lg_result.confidence
+                    match_label = (
+                        f"Tracking (DISK+LG): ({match_pos[0]:.0f}, {match_pos[1]:.0f}) "
+                        f"conf={match_conf:.2f}"
+                    )
+
+            # Step 3: LoFTR 小区域匹配（前两步都失败 + LoFTR 可用时）
+            if not matched and self._detector._loftr_matcher is not None:
+                loftr_radius = min(radius, 150)  # 300x300 区域，减少推理量
+                region = self._map_manager.get_logic_region(
+                    int(max(0, px - loftr_radius)),
+                    int(max(0, py - loftr_radius)),
+                    loftr_radius * 2, loftr_radius * 2, copy=False)
+                if region is not None:
+                    success, ai_result = self._detector.try_ai_match(
+                        minimap, region,
+                        (int(max(0, px - loftr_radius)),
+                         int(max(0, py - loftr_radius))))
+                    if success:
+                        matched = True
+                        match_pos = ai_result.position
+                        match_conf = ai_result.confidence
+                        match_label = (
+                            f"Tracking (LoFTR): ({match_pos[0]:.0f}, {match_pos[1]:.0f}) "
+                            f"conf={match_conf:.2f}"
+                        )
+
+            # 统一处理匹配结果
+            if matched and match_pos is not None:
                 # 传送检测
-                if self._position and result_sift.position:
-                    dist = ((result_sift.position[0] - self._position[0]) ** 2 +
-                            (result_sift.position[1] - self._position[1]) ** 2) ** 0.5
+                if self._position:
+                    dist = ((match_pos[0] - self._position[0]) ** 2 +
+                            (match_pos[1] - self._position[1]) ** 2) ** 0.5
                     if dist > self._config.teleport_threshold:
                         logger.warning("Teleport detected (%.0f px), re-scanning", dist)
                         self._change_state(TrackingState.GLOBAL_SCAN)
                         return self._build_status(f"Teleport detected ({dist:.0f} px)")
 
                 # EMA 平滑后赋值
-                if result_sift.position is not None:
-                    smoothed = self._smooth_position(result_sift.position[0], result_sift.position[1])
-                    self._position = smoothed
-                else:
-                    self._position = result_sift.position
-                self._confidence = result_sift.confidence
+                smoothed = self._smooth_position(match_pos[0], match_pos[1], match_conf)
+                self._position = smoothed
+                self._confidence = match_conf
                 self._lost_frames = 0
 
-                # 箭头方向检测 (每 N 帧一次)
+                # 箭头方向检测
                 if self._frame_count % self._arrow_detect_interval == 0:
                     arrow_dir = self._detector._arrow_detector.detect_direction(minimap)
                     if arrow_dir is not None:
                         self._direction = arrow_dir
-
-                # Fallback: compute direction from displacement
-                if self._prev_position is not None and result_sift.position is not None:
-                    dx = result_sift.position[0] - self._prev_position[0]
-                    dy = result_sift.position[1] - self._prev_position[1]
+                if self._prev_position is not None:
+                    dx = match_pos[0] - self._prev_position[0]
+                    dy = match_pos[1] - self._prev_position[1]
                     dist_moved = (dx * dx + dy * dy) ** 0.5
                     if dist_moved > 3.0 and self._frame_count % self._arrow_detect_interval != 0:
                         self._direction = (math.degrees(math.atan2(dx, -dy))) % 360
-                if result_sift.position is not None:
-                    self._prev_position = result_sift.position
+                self._prev_position = match_pos
 
                 self._notify_position()
-                return self._build_status(
-                    f"Tracking: ({self._position[0]:.0f}, {self._position[1]:.0f}) "
-                    f"conf={self._confidence:.2f}"
-                )
+                return self._build_status(match_label)
             else:
-                # LoFTR fallback (if SIFT failed and AI is available)
-                if self._detector.should_use_ai_fallback:
-                    region = self._map_manager.get_logic_region(
-                        int(max(0, px - radius)), int(max(0, py - radius)),
-                        radius * 2, radius * 2, copy=False
-                    )
-                    if region is not None:
-                        success, ai_result = self._detector.try_ai_match(
-                            minimap, region,
-                            (int(max(0, px - radius)), int(max(0, py - radius)))
-                        )
-                        if success:
-                            # EMA 平滑后赋值
-                            if ai_result.position is not None:
-                                smoothed = self._smooth_position(ai_result.position[0], ai_result.position[1])
-                                self._position = smoothed
-                            else:
-                                self._position = ai_result.position
-                            self._confidence = ai_result.confidence
-                            self._lost_frames = 0
-                            # 箭头方向检测
-                            if self._frame_count % self._arrow_detect_interval == 0:
-                                arrow_dir = self._detector._arrow_detector.detect_direction(minimap)
-                                if arrow_dir is not None:
-                                    self._direction = arrow_dir
-                            if self._prev_position is not None and ai_result.position is not None:
-                                dx = ai_result.position[0] - self._prev_position[0]
-                                dy = ai_result.position[1] - self._prev_position[1]
-                                dist_moved = (dx * dx + dy * dy) ** 0.5
-                                if dist_moved > 3.0 and self._frame_count % self._arrow_detect_interval != 0:
-                                    self._direction = (math.degrees(math.atan2(dx, -dy))) % 360
-                            if ai_result.position is not None:
-                                self._prev_position = ai_result.position
-                            self._notify_position()
-                            return self._build_status(
-                                f"Tracking (LoFTR): ({self._position[0]:.0f}, {self._position[1]:.0f}) "
-                                f"conf={self._confidence:.2f}"
-                            )
-
                 self._lost_frames += 1
                 if self._lost_frames > self._config.max_lost_frames:
                     self._change_state(TrackingState.INERTIA_NAV)
@@ -487,7 +512,7 @@ class PositionTracker:
 
             # EMA 平滑后赋值
             if result.position is not None:
-                smoothed = self._smooth_position(result.position[0], result.position[1])
+                smoothed = self._smooth_position(result.position[0], result.position[1], result.confidence)
                 self._position = smoothed
             else:
                 self._position = result.position
@@ -535,7 +560,7 @@ class PositionTracker:
             radius = self._config.tracking_radius * 2
             recovered = False
 
-            # 优先使用预计算特征恢复（更快）
+            # 预计算模式: SIFT → DISK+LG → LoFTR 三级恢复
             if self._detector._sift_matcher.is_precomputed:
                 minimap_gray = self._detector._image_processor.preprocess_minimap(
                     minimap, self._detector._use_clahe, self._detector._use_ring_mask,
@@ -545,19 +570,48 @@ class PositionTracker:
                     h, w = minimap_gray.shape[:2]
                     minimap_mask = self._detector._image_processor.create_ring_mask(
                         min(h, w), self._detector._ring_outer, self._detector._ring_inner)
+
+                recovery_pos = None
+                recovery_conf = 0.0
+
+                # Step 1: SIFT 预计算
                 result_sift = self._detector._sift_matcher.match_precomputed(
-                    minimap_gray,
-                    search_center=self._position,
-                    search_radius=radius,
-                    minimap_mask=minimap_mask)
-                if result_sift.success:
-                    # EMA 平滑后恢复
-                    if result_sift.position is not None:
-                        smoothed = self._smooth_position(result_sift.position[0], result_sift.position[1])
-                        self._position = smoothed
-                    else:
-                        self._position = result_sift.position
-                    self._confidence = result_sift.confidence
+                    minimap_gray, search_center=self._position,
+                    search_radius=radius, minimap_mask=minimap_mask)
+                if result_sift.success and result_sift.position is not None:
+                    recovery_pos = result_sift.position
+                    recovery_conf = result_sift.confidence
+
+                # Step 2: DISK+LG 预计算
+                if (recovery_pos is None
+                        and self._detector._lightglue_matcher is not None
+                        and self._detector._lightglue_matcher.is_precomputed):
+                    lg_result = self._detector._lightglue_matcher.match_precomputed(
+                        minimap_gray, search_center=self._position,
+                        search_radius=radius, minimap_mask=minimap_mask)
+                    if lg_result.success and lg_result.position is not None:
+                        recovery_pos = lg_result.position
+                        recovery_conf = lg_result.confidence
+
+                # Step 3: LoFTR 小区域（400x400）
+                if recovery_pos is None and self._detector._loftr_matcher is not None:
+                    loftr_r = min(radius, 200)
+                    region = self._map_manager.get_logic_region(
+                        int(max(0, px - loftr_r)), int(max(0, py - loftr_r)),
+                        loftr_r * 2, loftr_r * 2, copy=False)
+                    if region is not None:
+                        success, ai_result = self._detector.try_ai_match(
+                            minimap, region,
+                            (int(max(0, px - loftr_r)), int(max(0, py - loftr_r))))
+                        if success and ai_result.position is not None:
+                            recovery_pos = ai_result.position
+                            recovery_conf = ai_result.confidence
+
+                if recovery_pos is not None:
+                    smoothed = self._smooth_position(
+                        recovery_pos[0], recovery_pos[1], recovery_conf)
+                    self._position = smoothed
+                    self._confidence = recovery_conf
                     recovered = True
             else:
                 # Fallback: region-based 恢复
@@ -567,9 +621,9 @@ class PositionTracker:
                 if region is not None:
                     result = self._detector.detect(minimap, region, region_offset=(x1, y1))
                     if result.success:
-                        # EMA 平滑后恢复
                         if result.position is not None:
-                            smoothed = self._smooth_position(result.position[0], result.position[1])
+                            smoothed = self._smooth_position(
+                                result.position[0], result.position[1], result.confidence)
                             self._position = smoothed
                         else:
                             self._position = result.position

@@ -130,10 +130,14 @@ class MinimapDetector:
         self._hidden_count = 0
         self._hidden_threshold = 5
 
-        # LoFTR matcher (optional, requires torch+kornia)
+        # LoFTR matcher (legacy, optional)
         self._loftr_matcher = None
         self._use_ai = False
         self._detection_mode = "sift"  # "sift", "ai", "hybrid"
+
+        # DISK+LightGlue matcher (primary AI matcher, optional)
+        self._lightglue_matcher = None
+        self._use_lightglue = False
 
         # 可见性检测参数
         self._visibility_edge_ratio = 0.05
@@ -167,7 +171,22 @@ class MinimapDetector:
         Returns:
             DetectionResult
         """
-        # Step 0: 检查小地图可见性
+        # Step 0a: 区域裁剪优化 — 如果有位置历史且区域过大，裁剪到 400x400
+        max_region = 400
+        if (self._history.last is not None
+                and map_region_bgr.shape[0] > max_region
+                and map_region_bgr.shape[1] > max_region):
+            last_x, last_y = self._history.last
+            rel_x = last_x - region_offset[0]
+            rel_y = last_y - region_offset[1]
+            rh, rw = map_region_bgr.shape[:2]
+            half = max_region // 2
+            x1 = int(max(0, min(rel_x - half, rw - max_region)))
+            y1 = int(max(0, min(rel_y - half, rh - max_region)))
+            map_region_bgr = map_region_bgr[y1:y1 + max_region, x1:x1 + max_region]
+            region_offset = (region_offset[0] + x1, region_offset[1] + y1)
+
+        # Step 0b: 检查小地图可见性
         if not self.is_minimap_visible(minimap_bgr):
             self._hidden_count += 1
             if self._hidden_count > self._hidden_threshold:
@@ -212,26 +231,57 @@ class MinimapDetector:
                 min(h, w), self._ring_outer, self._ring_inner
             )
 
-        # Step 2: SIFT 特征匹配 (skip if mode is "ai")
+        # Step 2: DISK+LightGlue（主匹配器，当 torch 可用时）
+        if self._detection_mode != "sift" and self._lightglue_matcher is not None:
+            if self._lightglue_matcher.is_precomputed:
+                lg_result = self._lightglue_matcher.match_precomputed(
+                    minimap_gray,
+                    search_center=self._history.last,
+                    search_radius=500,
+                    minimap_mask=minimap_mask,
+                )
+            else:
+                lg_mask = None
+                if self._use_ring_mask:
+                    mh, mw = minimap_bgr.shape[:2]
+                    lg_mask = self._image_processor.create_ring_mask(
+                        min(mh, mw), self._ring_outer, self._ring_inner
+                    )
+                lg_result = self._lightglue_matcher.match(
+                    minimap_bgr, map_region_bgr, region_offset,
+                    minimap_mask=lg_mask,
+                )
+
+            if lg_result.success and self._validate_position(lg_result.position):
+                self._history.add(lg_result.position)
+                result = DetectionResult(
+                    success=True,
+                    position=lg_result.position,
+                    strategy=DetectionStrategy.AI,
+                    confidence=lg_result.confidence,
+                    details=f"DISK+LG: {lg_result.num_matches} matches, "
+                            f"{lg_result.inliers} inliers",
+                )
+                self._enrich_with_arrow(result, minimap_bgr)
+                return result
+
+        # Step 2.5: SIFT 特征匹配（降级 or 无 DL 环境的主匹配器）
         if self._detection_mode != "ai":
             if self._sift_matcher.is_precomputed:
-                # Use precomputed features with spatial search
                 search_center = self._history.last
-                search_radius = 500  # pixels
+                search_radius = 500
                 sift_result = self._sift_matcher.match_precomputed(
                     minimap_gray,
                     search_center=search_center,
                     search_radius=search_radius,
-                    minimap_mask=minimap_mask
+                    minimap_mask=minimap_mask,
                 )
             else:
-                # Fallback: original region-based matching
-                # 有历史位置时视为局部搜索，使用更严格的 ratio 阈值
                 sift_result = self._sift_matcher.match(
                     minimap_gray, region_gray,
                     minimap_mask=minimap_mask,
                     region_offset=region_offset,
-                    is_local=self._history.last is not None
+                    is_local=self._history.last is not None,
                 )
 
             if sift_result.success and self._validate_position(sift_result.position):
@@ -242,19 +292,14 @@ class MinimapDetector:
                     strategy=DetectionStrategy.SIFT,
                     confidence=sift_result.confidence,
                     details=f"SIFT match: {sift_result.good_matches} matches, "
-                            f"{sift_result.inliers} inliers"
+                            f"{sift_result.inliers} inliers",
                 )
                 self._enrich_with_arrow(result, minimap_bgr)
                 return result
 
-        # Step 2.5: LoFTR AI matching
-        # Runs when: mode is "ai", or mode is "hybrid" and SIFT failed
-        use_ai_now = (
-            self._detection_mode == "ai"
-            or (self._detection_mode == "hybrid" and self._use_ai)
-        )
-        if use_ai_now and self._loftr_matcher is not None:
-            # 为 LoFTR 也提供圆环遮罩，去除玩家图标和边角 UI 的干扰
+        # Step 2.9: LoFTR 密集匹配（DISK+LG 和 SIFT 均失败时的补充，
+        #           LoFTR 是 dense matching，在纹理稀疏区域优于 sparse 方法）
+        if self._loftr_matcher is not None and self._detection_mode != "sift":
             loftr_mask = None
             if self._use_ring_mask:
                 mh, mw = minimap_bgr.shape[:2]
@@ -263,7 +308,7 @@ class MinimapDetector:
                 )
             ai_result = self._loftr_matcher.match(
                 minimap_bgr, map_region_bgr, region_offset,
-                minimap_mask=loftr_mask
+                minimap_mask=loftr_mask,
             )
             if ai_result.success and self._validate_position(ai_result.position):
                 self._history.add(ai_result.position)
@@ -273,7 +318,7 @@ class MinimapDetector:
                     strategy=DetectionStrategy.AI,
                     confidence=ai_result.confidence,
                     details=f"LoFTR match: {ai_result.num_matches} matches, "
-                            f"{ai_result.inliers} inliers"
+                            f"{ai_result.inliers} inliers",
                 )
                 self._enrich_with_arrow(result, minimap_bgr)
                 return result
@@ -402,7 +447,8 @@ class MinimapDetector:
 
         检查:
         - 是否为 None
-        - 移动速度是否合理 (防止跳变)
+        - 极端跳变 (>2000px 匹配错误)
+        - 趋势偏离 (与运动趋势方向偏差过大的中等跳变)
 
         Args:
             position: 检测到的位置
@@ -416,20 +462,38 @@ class MinimapDetector:
         if self._history.last is None:
             return True  # 第一次检测，接受任何位置
 
-        # 检查移动距离 — 仅拒绝明显不合理的跳变
-        # 正常传送（几百px）由 position_tracker 的传送检测处理
         last = self._history.last
         dx = position[0] - last[0]
         dy = position[1] - last[1]
         distance = (dx ** 2 + dy ** 2) ** 0.5
 
-        max_speed = 2000  # 仅拒绝极端跳变（匹配错误），传送由 tracker 层处理
-        if distance > max_speed:
+        # 极端跳变拒绝
+        if distance > 2000:
             logger.warning(
-                "Position jump detected: %.1f pixels (max=%d)",
-                distance, max_speed
+                "Position jump detected: %.1f pixels (max=2000)",
+                distance,
             )
             return False
+
+        # 趋势偏离检测：如果有足够历史记录，拒绝偏离运动趋势过大的位置
+        # 这可以过滤 50-300px 的中等匹配错误
+        if len(self._history.positions) >= 3 and distance > 50:
+            # 计算最近 3 帧的平均移动量
+            recent = self._history.positions[-3:]
+            avg_step = 0.0
+            for i in range(1, len(recent)):
+                sx = recent[i][0] - recent[i - 1][0]
+                sy = recent[i][1] - recent[i - 1][1]
+                avg_step += (sx * sx + sy * sy) ** 0.5
+            avg_step /= (len(recent) - 1)
+
+            # 如果本次跳跃远大于近期平均步幅（5 倍以上），判定为异常
+            if avg_step > 0 and distance > max(avg_step * 5, 150):
+                logger.debug(
+                    "Trend deviation: jump=%.1f, avg_step=%.1f, rejected",
+                    distance, avg_step,
+                )
+                return False
 
         return True
 
@@ -440,20 +504,27 @@ class MinimapDetector:
         Set the detection mode.
 
         Args:
-            mode: "sift" (SIFT only), "ai" (LoFTR only), "hybrid" (SIFT + AI fallback)
+            mode: "sift" (SIFT only), "ai" (DISK+LG only), "hybrid" (DISK+LG -> SIFT)
         """
         if mode not in ("sift", "ai", "hybrid"):
             logger.warning("Unknown detection mode '%s', defaulting to 'sift'", mode)
             mode = "sift"
 
-        # For "ai" or "hybrid", ensure AI mode is initialized
+        # For "ai" or "hybrid", initialize LightGlue and LoFTR
         if mode in ("ai", "hybrid"):
+            if self._lightglue_matcher is None:
+                self.enable_lightglue_mode(True)
+            # Also initialize LoFTR as dense-matching fallback
+            # (LoFTR covers texture-poor areas where sparse matchers fail)
             if self._loftr_matcher is None:
-                if not self.enable_ai_mode(True):
-                    logger.warning("AI mode unavailable, falling back to 'sift'")
-                    self._detection_mode = "sift"
-                    self._use_ai = False
-                    return
+                self.enable_ai_mode(True)
+            if (self._lightglue_matcher is None
+                    and self._loftr_matcher is None):
+                logger.warning("AI mode unavailable, falling back to 'sift'")
+                self._detection_mode = "sift"
+                self._use_ai = False
+                self._use_lightglue = False
+                return
             self._use_ai = True
         elif mode == "sift":
             self._use_ai = False
@@ -464,6 +535,43 @@ class MinimapDetector:
     @property
     def detection_mode(self) -> str:
         return self._detection_mode
+
+    def enable_lightglue_mode(self, enabled: bool = True) -> bool:
+        """
+        Enable/disable DISK+LightGlue matching mode.
+
+        Args:
+            enabled: True to enable, False to disable
+
+        Returns:
+            True if the mode was set successfully
+        """
+        if enabled:
+            try:
+                from ..vision.lightglue_matcher import (
+                    is_lightglue_available, LightGlueMatcher,
+                )
+            except (ImportError, OSError, RuntimeError) as e:
+                logger.warning("Cannot import LightGlue module: %s", e)
+                self._use_lightglue = False
+                return False
+            if not is_lightglue_available():
+                logger.warning("LightGlue not available - torch/kornia not installed")
+                self._use_lightglue = False
+                return False
+            if self._lightglue_matcher is None:
+                try:
+                    self._lightglue_matcher = LightGlueMatcher()
+                    logger.info("DISK+LightGlue mode enabled")
+                except Exception as e:
+                    logger.error("Failed to initialize LightGlue: %s", e)
+                    self._use_lightglue = False
+                    return False
+            self._use_lightglue = True
+            return True
+        else:
+            self._use_lightglue = False
+            return True
 
     def enable_ai_mode(self, enabled: bool = True) -> bool:
         """
@@ -531,14 +639,15 @@ class MinimapDetector:
 
     @property
     def is_ai_available(self) -> bool:
-        """Whether AI (LoFTR) matcher is initialized and ready."""
-        return self._loftr_matcher is not None
+        """Whether AI matcher (LightGlue or LoFTR) is initialized and ready."""
+        return self._lightglue_matcher is not None or self._loftr_matcher is not None
 
     @property
     def should_use_ai_fallback(self) -> bool:
         """Whether AI fallback should be attempted on SIFT failure."""
         return (self._detection_mode in ("ai", "hybrid")
-                and self._loftr_matcher is not None)
+                and (self._lightglue_matcher is not None
+                     or self._loftr_matcher is not None))
 
     def try_ai_match(self, minimap_bgr, map_region_bgr, region_offset):
         """Attempt LoFTR AI matching. Returns (success, result) or (False, None)."""
@@ -561,18 +670,29 @@ class MinimapDetector:
 
     def precompute_map(self, map_gray: np.ndarray) -> int:
         """
-        Pre-compute SIFT features for the world map.
+        Pre-compute features for the world map.
 
-        Applies the same CLAHE preprocessing used during matching,
-        then delegates to SIFTMatcher.precompute_map_features().
+        SIFT features are always pre-computed (as fallback).
+        DISK+LightGlue features are pre-computed if the matcher is available.
 
         Args:
             map_gray: Grayscale world map image
 
         Returns:
-            Number of features extracted
+            Number of SIFT features extracted
         """
+        # SIFT 预计算（始终执行，作为降级保底）
         processed = self._image_processor.preprocess_map_region(
             map_gray, use_clahe=self._use_clahe
         )
-        return self._sift_matcher.precompute_map_features(processed)
+        sift_count = self._sift_matcher.precompute_map_features(processed)
+
+        # DISK+LightGlue 预计算（如果可用）
+        if self._lightglue_matcher is not None:
+            try:
+                lg_count = self._lightglue_matcher.precompute_map_features(map_gray)
+                logger.info("DISK+LightGlue pre-computed %d features", lg_count)
+            except Exception as e:
+                logger.warning("DISK+LightGlue pre-computation failed: %s", e)
+
+        return sift_count

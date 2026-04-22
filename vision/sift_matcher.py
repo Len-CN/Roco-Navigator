@@ -492,9 +492,9 @@ class SIFTMatcher:
             logger.debug("Homography rejected: inlier_ratio=%.2f < 0.25", inlier_ratio)
             return False
 
-        # 绝对内点数下限：至少 6 个内点才能可靠估计 homography
-        if inliers < 6:
-            logger.debug("Homography rejected: inliers=%d < 6", inliers)
+        # 绝对内点数下限：至少 8 个内点才能可靠估计 homography
+        if inliers < 8:
+            logger.debug("Homography rejected: inliers=%d < 8", inliers)
             return False
 
         # 边界检查：变换后坐标应在地图范围内（允许少量溢出）

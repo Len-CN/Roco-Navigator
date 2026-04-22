@@ -22,21 +22,21 @@ from ..widgets.neumorphic import (
 
 class InstallThread(QThread):
     """安装线程"""
-    
-    progress = pyqtSignal(str)  # 进度消息
-    finished = pyqtSignal(bool, str)  # 完成信号 (成功, 消息)
-    
-    def __init__(self, manager: PackageManager, package_key: str):
+
+    progress = pyqtSignal(str)
+    finished = pyqtSignal(bool, str)
+
+    def __init__(self, manager: PackageManager, feature_key: str):
         super().__init__()
         self.manager = manager
-        self.package_key = package_key
-    
+        self.feature_key = feature_key
+
     def run(self):
-        """执行安装"""
+        """执行功能安装"""
         try:
-            success, log = self.manager.install_package(
-                self.package_key,
-                lambda msg: self.progress.emit(msg)
+            success, log = self.manager.install_feature(
+                self.feature_key,
+                lambda msg: self.progress.emit(msg),
             )
             self.finished.emit(success, log)
         except Exception as e:
@@ -48,12 +48,12 @@ class DependencyDialog(QDialog):
     
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("依赖管理")
+        self.setWindowTitle("功能管理")
         self.setMinimumSize(700, 600)
-        
+
         self.manager = PackageManager()
         self.install_thread = None
-        
+
         self._init_ui()
         self._refresh_status()
     
@@ -70,20 +70,20 @@ class DependencyDialog(QDialog):
         layout.setContentsMargins(20, 20, 20, 20)
         
         # 标题
-        title = NeumorphicLabel("依赖管理", level="title")
+        title = NeumorphicLabel("功能管理", level="title")
         layout.addWidget(title)
-        
+
         # 说明
         desc = NeumorphicLabel(
-            "管理程序依赖包。大文件支持断点续传，可随时暂停。\n"
-            "使用官方源下载，确保安全可靠。",
-            level="caption"
+            "安装可选功能以增强程序能力。\n"
+            "所有文件从官方源下载，安全可靠。",
+            level="caption",
         )
         desc.setWordWrap(True)
         layout.addWidget(desc)
-        
-        # 包列表
-        list_label = NeumorphicLabel("可用包：", level="body")
+
+        # 功能列表
+        list_label = NeumorphicLabel("可选功能：", level="body")
         layout.addWidget(list_label)
         
         self.package_list = QListWidget()
@@ -156,35 +156,28 @@ class DependencyDialog(QDialog):
         layout.addWidget(self.log_text)
     
     def _refresh_status(self):
-        """刷新包状态"""
+        """刷新功能状态"""
         self.package_list.clear()
-        
-        for key, config in self.manager.PACKAGES.items():
-            installed = self.manager.check_installed(key)
-            
-            # 创建列表项
-            display_name = config["display_name"]
-            size_mb = config["size_mb"]
-            required = config.get("required", False)
-            
-            status = "✓ 已安装" if installed else "○ 未安装"
-            tag = "[必需]" if required else "[可选]"
-            
-            text = f"{status}  {display_name}  ({size_mb} MB)  {tag}"
-            
+
+        for feat_key, feat in self.manager.FEATURES.items():
+            installed = self.manager.check_feature_installed(feat_key)
+
+            status = "✓ 已启用" if installed else "○ 未安装"
+            size = feat["total_size_mb"]
+            size_str = f"约 {size / 1024:.1f} GB" if size >= 1024 else f"约 {size} MB"
+
+            text = f"{status}  {feat['feature_name']}  ({size_str}) — {feat['description']}"
+
             item = QListWidgetItem(text)
-            item.setData(Qt.UserRole, key)
-            
-            # 设置颜色
+            item.setData(Qt.UserRole, feat_key)
+
             if installed:
                 item.setForeground(Qt.darkGreen)
-            elif required:
-                item.setForeground(Qt.red)
             else:
                 item.setForeground(Qt.darkGray)
-            
+
             self.package_list.addItem(item)
-        
+
         self._log("状态已刷新")
     
     def _log(self, message: str):
@@ -195,49 +188,62 @@ class DependencyDialog(QDialog):
         )
     
     def _on_install(self):
-        """安装选中的包"""
+        """安装选中的功能"""
         item = self.package_list.currentItem()
         if not item:
-            QMessageBox.warning(self, "提示", "请先选择要安装的包")
+            QMessageBox.warning(self, "提示", "请先选择要安装的功能")
             return
-        
-        package_key = item.data(Qt.UserRole)
-        config = self.manager.PACKAGES[package_key]
-        
-        # 检查是否已安装
-        if self.manager.check_installed(package_key):
-            QMessageBox.information(self, "提示", "该包已安装")
+
+        feature_key = item.data(Qt.UserRole)
+        feat = self.manager.FEATURES.get(feature_key)
+        if not feat:
             return
-        
-        # 确认安装
+
+        if self.manager.check_feature_installed(feature_key):
+            QMessageBox.information(self, "提示", "该功能已安装")
+            return
+
+        # 检查前置依赖
+        depends_on = feat.get("depends_on")
+        if depends_on and not self.manager.check_feature_installed(depends_on):
+            dep_name = self.manager.FEATURES[depends_on]["feature_name"]
+            QMessageBox.warning(
+                self, "提示",
+                f"请先安装「{dep_name}」",
+            )
+            return
+
+        size = feat["total_size_mb"]
+        size_str = f"{size / 1024:.1f} GB" if size >= 1024 else f"{size} MB"
+
         reply = QMessageBox.question(
             self,
             "确认安装",
-            f"确定要安装 {config['display_name']} ({config['size_mb']} MB) 吗？\n\n"
-            f"将从官方源下载，支持断点续传。",
-            QMessageBox.Yes | QMessageBox.No
+            f"确定要安装「{feat['feature_name']}」吗？\n\n"
+            f"{feat['description']}\n"
+            f"预计大小: {size_str}\n"
+            f"将从官方源下载。",
+            QMessageBox.Yes | QMessageBox.No,
         )
-        
+
         if reply != QMessageBox.Yes:
             return
-        
-        # 开始安装
-        self._start_installation(package_key)
+
+        self._start_installation(feature_key)
     
-    def _start_installation(self, package_key: str):
-        """开始安装"""
+    def _start_installation(self, feature_key: str):
+        """开始安装功能"""
         self.install_btn.setEnabled(False)
         self.uninstall_btn.setEnabled(False)
         self.refresh_btn.setEnabled(False)
-        
+
         self.progress_bar.setVisible(True)
-        self.progress_bar.setRange(0, 0)  # 不确定模式
-        
-        config = self.manager.PACKAGES[package_key]
-        self._log(f"\n开始安装 {config['display_name']}...")
-        
-        # 创建安装线程
-        self.install_thread = InstallThread(self.manager, package_key)
+        self.progress_bar.setRange(0, 0)
+
+        feat = self.manager.FEATURES[feature_key]
+        self._log(f"\n开始安装「{feat['feature_name']}」...")
+
+        self.install_thread = InstallThread(self.manager, feature_key)
         self.install_thread.progress.connect(self._on_progress)
         self.install_thread.finished.connect(self._on_install_finished)
         self.install_thread.start()
@@ -249,24 +255,24 @@ class DependencyDialog(QDialog):
     def _on_install_finished(self, success: bool, log: str):
         """安装完成"""
         self.progress_bar.setVisible(False)
-        
+
         self.install_btn.setEnabled(True)
         self.uninstall_btn.setEnabled(True)
         self.refresh_btn.setEnabled(True)
-        
+
         if success:
             self._log("\n✓ 安装成功！")
-            
-            # 检查是否安装了需要重启的包
+
             item = self.package_list.currentItem()
             if item:
-                package_key = item.data(Qt.UserRole)
-                if package_key in ["torch", "kornia"]:
+                feature_key = item.data(Qt.UserRole)
+                feat = self.manager.FEATURES.get(feature_key, {})
+                if feat.get("restart_required"):
                     QMessageBox.information(
                         self, "安装成功",
-                        "安装完成！\n\n"
-                        "请重启程序以使用 AI 功能。\n"
-                        "关闭程序后重新运行 start.bat 即可。"
+                        f"「{feat['feature_name']}」安装完成！\n\n"
+                        "请重启程序以启用新功能。\n"
+                        "关闭程序后重新运行 start.bat 即可。",
                     )
                 else:
                     QMessageBox.information(self, "成功", "安装完成！")
@@ -275,44 +281,44 @@ class DependencyDialog(QDialog):
         else:
             self._log(f"\n✗ 安装失败\n{log}")
             QMessageBox.critical(self, "失败", f"安装失败：\n{log[:200]}")
-        
+
         self._refresh_status()
     
     def _on_uninstall(self):
-        """卸载选中的包"""
+        """卸载选中的功能"""
         item = self.package_list.currentItem()
         if not item:
-            QMessageBox.warning(self, "提示", "请先选择要卸载的包")
+            QMessageBox.warning(self, "提示", "请先选择要卸载的功能")
             return
-        
-        package_key = item.data(Qt.UserRole)
-        config = self.manager.PACKAGES[package_key]
-        
-        # 检查是否已安装
-        if not self.manager.check_installed(package_key):
-            QMessageBox.information(self, "提示", "该包未安装")
+
+        feature_key = item.data(Qt.UserRole)
+        feat = self.manager.FEATURES.get(feature_key)
+        if not feat:
             return
-        
-        # 确认卸载
+
+        if not self.manager.check_feature_installed(feature_key):
+            QMessageBox.information(self, "提示", "该功能未安装")
+            return
+
         reply = QMessageBox.question(
             self,
             "确认卸载",
-            f"确定要卸载 {config['display_name']} 吗？",
-            QMessageBox.Yes | QMessageBox.No
+            f"确定要卸载「{feat['feature_name']}」吗？",
+            QMessageBox.Yes | QMessageBox.No,
         )
-        
+
         if reply != QMessageBox.Yes:
             return
-        
-        # 执行卸载
-        self._log(f"\n卸载 {config['display_name']}...")
-        success, log = self.manager.uninstall_package(config["name"])
-        
+
+        self._log(f"\n卸载「{feat['feature_name']}」...")
+        success, log = self.manager.uninstall_feature(feature_key,
+                                                       lambda msg: self._log(msg))
+
         if success:
             self._log("✓ 卸载成功")
             QMessageBox.information(self, "成功", "卸载完成！")
         else:
             self._log(f"✗ 卸载失败\n{log}")
             QMessageBox.critical(self, "失败", f"卸载失败：\n{log[:200]}")
-        
+
         self._refresh_status()

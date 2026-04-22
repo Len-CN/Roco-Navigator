@@ -21,39 +21,70 @@ logger = logging.getLogger(__name__)
 
 class PackageManager:
     """包管理器"""
-    
-    # 包配置（CUDA 版本）
-    PACKAGES = {
-        "opencv": {
-            "name": "opencv-python",
-            "display_name": "OpenCV",
-            "size_mb": 40,
-            "required": True,
-            "install_method": "pip"
-        },
-        "torch": {
-            "name": "torch",
-            "display_name": "PyTorch (CUDA)",
-            "size_mb": 2500,
+
+    # 按功能分组（用户看到的是功能名而非包名）
+    FEATURES = {
+        "ai_matching": {
+            "feature_name": "AI 智能定位",
+            "description": "深度学习特征匹配（DISK+LightGlue），定位更准确更鲁棒",
+            "packages": [
+                {
+                    "key": "torch", "name": "torch", "size_mb": 2500,
+                    "install_method": "pip",
+                    "index_url": "https://download.pytorch.org/whl/cu121",
+                },
+                {
+                    "key": "kornia", "name": "kornia", "size_mb": 50,
+                    "install_method": "pip",
+                },
+            ],
+            "total_size_mb": 2550,
             "required": False,
-            "install_method": "pip",
-            "index_url": "https://download.pytorch.org/whl/cu121"
+            "restart_required": True,
         },
-        "kornia": {
-            "name": "kornia",
-            "display_name": "Kornia",
-            "size_mb": 50,
+        "advanced_routing": {
+            "feature_name": "高级路线规划",
+            "description": "使用 OR-Tools 求解器优化采集路线，大量点位时更快更优",
+            "packages": [
+                {
+                    "key": "ortools", "name": "ortools", "size_mb": 30,
+                    "install_method": "pip",
+                },
+            ],
+            "total_size_mb": 30,
             "required": False,
-            "install_method": "pip"
+            "restart_required": False,
         },
-        "ortools": {
-            "name": "ortools",
-            "display_name": "OR-Tools",
-            "size_mb": 30,
+        "amd_gpu": {
+            "feature_name": "AMD/Intel 显卡加速",
+            "description": "为 AMD 或 Intel 显卡启用 GPU 加速（NVIDIA 用户无需安装）",
+            "packages": [
+                {
+                    "key": "torch_directml", "name": "torch-directml",
+                    "size_mb": 150, "install_method": "pip",
+                },
+            ],
+            "total_size_mb": 150,
             "required": False,
-            "install_method": "pip"
-        }
+            "restart_required": True,
+            "depends_on": "ai_matching",
+        },
     }
+
+    # 兼容旧代码：从 FEATURES 自动生成 PACKAGES 字典
+    PACKAGES = {}
+    for _feat_key, _feat in FEATURES.items():
+        for _pkg in _feat["packages"]:
+            _entry = {
+                "name": _pkg["name"],
+                "display_name": _feat["feature_name"],
+                "size_mb": _pkg["size_mb"],
+                "required": _feat["required"],
+                "install_method": _pkg["install_method"],
+            }
+            if "index_url" in _pkg:
+                _entry["index_url"] = _pkg["index_url"]
+            PACKAGES[_pkg["key"]] = _entry
     
     def __init__(self, cache_dir: Optional[Path] = None):
         """
@@ -340,6 +371,69 @@ class PackageManager:
             logger.error(f"下载失败: {e}")
             return False
     
+    def check_feature_installed(self, feature_key: str) -> bool:
+        """检查功能的所有包是否已安装"""
+        feat = self.FEATURES.get(feature_key)
+        if not feat:
+            return False
+        return all(self.check_installed(pkg["key"]) for pkg in feat["packages"])
+
+    def install_feature(self, feature_key: str,
+                        progress_callback: Optional[Callable] = None) -> Tuple[bool, str]:
+        """
+        按功能安装所有关联包
+
+        Args:
+            feature_key: 功能键名
+            progress_callback: 进度回调
+
+        Returns:
+            (成功, 日志)
+        """
+        feat = self.FEATURES.get(feature_key)
+        if not feat:
+            return False, f"未知功能: {feature_key}"
+
+        # 检查前置依赖
+        depends_on = feat.get("depends_on")
+        if depends_on:
+            if not self.check_feature_installed(depends_on):
+                dep_name = self.FEATURES[depends_on]["feature_name"]
+                return False, f"请先安装「{dep_name}」"
+
+        logs = []
+        for pkg in feat["packages"]:
+            if self.check_installed(pkg["key"]):
+                if progress_callback:
+                    progress_callback(f"{pkg['name']} 已安装，跳过")
+                continue
+            if progress_callback:
+                progress_callback(f"正在安装: {feat['feature_name']}...")
+            success, log = self.install_package(pkg["key"], progress_callback)
+            logs.append(log)
+            if not success:
+                return False, "\n".join(logs)
+
+        return True, "\n".join(logs)
+
+    def uninstall_feature(self, feature_key: str,
+                          progress_callback: Optional[Callable] = None) -> Tuple[bool, str]:
+        """按功能卸载所有关联包"""
+        feat = self.FEATURES.get(feature_key)
+        if not feat:
+            return False, f"未知功能: {feature_key}"
+
+        logs = []
+        for pkg in reversed(feat["packages"]):
+            if not self.check_installed(pkg["key"]):
+                continue
+            if progress_callback:
+                progress_callback(f"正在卸载: {pkg['name']}...")
+            success, log = self.uninstall_package(pkg["name"])
+            logs.append(log)
+
+        return True, "\n".join(logs)
+
     def _get_package_dependencies(self, package_name: str) -> List[str]:
         """获取包的依赖列表"""
         # 常见依赖映射

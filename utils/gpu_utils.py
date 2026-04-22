@@ -13,13 +13,14 @@ logger = logging.getLogger(__name__)
 
 class GPUManager:
     """GPU 管理器"""
-    
+
     def __init__(self):
         self.gpu_available: bool = False
         self.cuda_enabled: bool = False
         self.device_count: int = 0
+        self.gpu_type: str = "none"  # "cuda", "directml", "none"
         self._device_info: Dict = {}
-        
+
         self._check_gpu()
     
     def _check_gpu(self) -> None:
@@ -31,29 +32,51 @@ class GPUManager:
             if count > 0:
                 self.gpu_available = True
                 self.device_count = count
+                self.gpu_type = "cuda"
                 self._gather_device_info()
                 logger.info("CUDA available via OpenCV: %d device(s)", count)
                 return
         except (AttributeError, Exception):
             pass
-        
+
         # Method 2: PyTorch CUDA
         try:
             import torch
             if torch.cuda.is_available():
                 self.gpu_available = True
                 self.device_count = torch.cuda.device_count()
+                self.gpu_type = "cuda"
                 for i in range(self.device_count):
                     self._device_info[i] = {
                         "device_id": i,
-                        "name": torch.cuda.get_device_name(i)
+                        "name": torch.cuda.get_device_name(i),
+                        "type": "cuda",
                     }
                 logger.info("CUDA available via PyTorch: %d device(s)", self.device_count)
                 return
         except Exception:
             pass
-        
-        # Method 3: Check nvidia-smi
+
+        # Method 3: DirectML (AMD/Intel GPU on Windows)
+        try:
+            import torch_directml
+            dml_count = torch_directml.device_count()
+            if dml_count > 0:
+                self.gpu_available = True
+                self.device_count = dml_count
+                self.gpu_type = "directml"
+                for i in range(dml_count):
+                    self._device_info[i] = {
+                        "device_id": i,
+                        "name": f"DirectML Device {i}",
+                        "type": "directml",
+                    }
+                logger.info("GPU available via DirectML: %d device(s)", dml_count)
+                return
+        except (ImportError, Exception):
+            pass
+
+        # Method 4: Check nvidia-smi
         try:
             import subprocess
             result = subprocess.run(
@@ -64,13 +87,16 @@ class GPUManager:
                 gpus = result.stdout.strip().split('\n')
                 self.gpu_available = True
                 self.device_count = len(gpus)
+                self.gpu_type = "cuda"
                 for i, name in enumerate(gpus):
-                    self._device_info[i] = {"device_id": i, "name": name.strip()}
+                    self._device_info[i] = {
+                        "device_id": i, "name": name.strip(), "type": "cuda",
+                    }
                 logger.info("GPU detected via nvidia-smi: %s", gpus)
                 return
         except (FileNotFoundError, subprocess.TimeoutExpired, Exception):
             pass
-        
+
         logger.info("No GPU detected, using CPU mode")
         self.gpu_available = False
     
@@ -176,9 +202,32 @@ class GPUManager:
         """
         return self.cuda_enabled
     
+    def get_torch_device(self):
+        """
+        返回最佳 torch device，供 LightGlue/LoFTR 等深度学习模块使用。
+
+        优先级: CUDA > DirectML > CPU
+        """
+        try:
+            import torch
+        except ImportError:
+            return None
+
+        if torch.cuda.is_available():
+            return torch.device("cuda")
+
+        try:
+            import torch_directml
+            if torch_directml.device_count() > 0:
+                return torch_directml.device(0)
+        except ImportError:
+            pass
+
+        return torch.device("cpu")
+
     def __repr__(self) -> str:
         status = "已启用" if self.cuda_enabled else ("可用" if self.gpu_available else "不可用")
-        return f"GPUManager(status={status}, devices={self.device_count})"
+        return f"GPUManager(status={status}, type={self.gpu_type}, devices={self.device_count})"
 
 
 # 全局 GPU 管理器实例（懒加载）

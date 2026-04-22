@@ -26,7 +26,8 @@ class Settings:
             "update_interval": 100,      # 毫秒
             "position_threshold": 5,      # 像素
             "teleport_threshold": 100,    # 像素
-            "max_history": 10             # 历史位置数量
+            "max_history": 10,            # 历史位置数量
+            "detection_mode": "hybrid"   # "sift", "ai", "hybrid"
         },
         "ui": {
             "overlay_enabled": True,
@@ -39,7 +40,8 @@ class Settings:
             "theme": "neumorphism"
         },
         "performance": {
-            "image_scale": 1.0
+            "image_scale": 1.0,
+            "gpu_type": "auto"           # "auto", "cuda", "directml", "cpu"
         },
         "data_update": {
             "wiki_url": "https://wiki.biligame.com/rocom/%E5%A4%A7%E5%9C%B0%E5%9B%BE",
@@ -55,6 +57,12 @@ class Settings:
             "min_good_matches": 5,        # 最小匹配点数
             "fallback_to_color": True,    # 降级到颜色检测
             "check_minimap_visible": True # 检查小地图可见性
+        },
+        "ai_matching": {
+            "confidence_threshold": 0.5,  # DISK+LightGlue 匹配置信度阈值
+            "min_matches": 8,             # 最小匹配点数
+            "ransac_threshold": 8.0,      # RANSAC 重投影阈值
+            "cache_features": True        # 缓存预计算特征到磁盘
         },
         "navigation": {
             "arrival_distance": 20,       # 到达判定距离 (像素)

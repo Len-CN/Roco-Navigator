@@ -100,7 +100,7 @@ class SettingsDialog(QDialog):
         tabs.addTab(self._create_display_tab(), "显示")
         tabs.addTab(self._create_performance_tab(), "性能")
         tabs.addTab(self._create_navigation_tab(), "导航")
-        tabs.addTab(self._create_dependencies_tab(), "依赖")
+        tabs.addTab(self._create_dependencies_tab(), "功能")
         layout.addWidget(tabs)
 
         # Buttons
@@ -160,11 +160,11 @@ class SettingsDialog(QDialog):
 
         # Detection mode
         self._detection_mode = NeumorphicComboBox()
-        self._detection_mode.addItems(["SIFT (默认)", "LoFTR AI", "混合 (SIFT+AI)"])
+        self._detection_mode.addItems(["SIFT (经典)", "AI 智能定位", "混合 (推荐)"])
         self._detection_mode.setToolTip(
-            "SIFT: 仅使用传统特征匹配 (快速、稳定)\n"
-            "LoFTR AI: 仅使用深度学习匹配 (抗干扰强，需GPU)\n"
-            "混合: SIFT 优先，失败时切换 AI (推荐有GPU时使用)"
+            "SIFT: 仅使用传统特征匹配（快速、无需额外依赖）\n"
+            "AI 智能定位: 仅使用 DISK+LightGlue 深度学习匹配（更准确，需安装 AI 功能）\n"
+            "混合: AI 优先，失败时降级到 SIFT（推荐）"
         )
         mode_map = {"sift": 0, "ai": 1, "hybrid": 2}
         current_mode = self._settings.get("tracking.detection_mode", "sift")
@@ -226,6 +226,29 @@ class SettingsDialog(QDialog):
         )
         caption.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px;")
         layout.addWidget(caption)
+
+        layout.addWidget(NeumorphicSeparator())
+
+        # GPU type
+        self._gpu_type = NeumorphicComboBox()
+        self._gpu_type.addItems(["自动检测", "NVIDIA (CUDA)", "AMD/Intel (DirectML)", "仅 CPU"])
+        self._gpu_type.setToolTip(
+            "自动检测: 自动选择最佳 GPU\n"
+            "NVIDIA: 使用 CUDA 加速（需 NVIDIA 显卡）\n"
+            "AMD/Intel: 使用 DirectML 加速（需安装 AMD 显卡加速功能）\n"
+            "仅 CPU: 不使用 GPU 加速"
+        )
+        gpu_map = {"auto": 0, "cuda": 1, "directml": 2, "cpu": 3}
+        current_gpu = self._settings.get("performance.gpu_type", "auto")
+        self._gpu_type.setCurrentIndex(gpu_map.get(current_gpu, 0))
+        layout.addLayout(self._create_row("GPU 加速", self._gpu_type))
+
+        gpu_caption = NeumorphicLabel(
+            "选择 GPU 加速方式。AMD/Intel 显卡需在功能管理器中安装对应支持。",
+            level="body",
+        )
+        gpu_caption.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px;")
+        layout.addWidget(gpu_caption)
 
         layout.addWidget(NeumorphicSeparator())
 
@@ -328,23 +351,23 @@ class SettingsDialog(QDialog):
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(15)
         
-        # ── 依赖管理器卡片 ──
+        # ── 功能管理器卡片 ──
         dep_manager_card = NeumorphicCard()
         dep_manager_layout = QVBoxLayout(dep_manager_card)
         dep_manager_layout.setSpacing(10)
-        
-        dep_manager_title = NeumorphicLabel("依赖管理器", level="subtitle")
+
+        dep_manager_title = NeumorphicLabel("功能管理器", level="subtitle")
         dep_manager_layout.addWidget(dep_manager_title)
-        
+
         dep_manager_desc = QLabel(
-            "使用依赖管理器安装和管理所有可选依赖包。\n"
+            "安装可选功能以增强程序能力。\n"
             "支持断点续传、官方源下载，安全可靠。"
         )
         dep_manager_desc.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px;")
         dep_manager_desc.setWordWrap(True)
         dep_manager_layout.addWidget(dep_manager_desc)
-        
-        dep_manager_btn = NeumorphicButton("打开依赖管理器")
+
+        dep_manager_btn = NeumorphicButton("打开功能管理器")
         dep_manager_btn.clicked.connect(self._open_dependency_manager)
         dep_manager_layout.addWidget(dep_manager_btn)
         
@@ -353,40 +376,39 @@ class SettingsDialog(QDialog):
         # 分隔线
         layout.addWidget(NeumorphicSeparator())
         
-        # ── 依赖状态卡片 ──
+        # ── 功能状态卡片 ──
         status_card = NeumorphicCard()
         status_layout = QVBoxLayout(status_card)
         status_layout.setSpacing(10)
-        
-        status_title = NeumorphicLabel("依赖状态", level="subtitle")
+
+        status_title = NeumorphicLabel("功能状态", level="subtitle")
         status_layout.addWidget(status_title)
-        
-        # 状态列表
+
+        # 功能状态列表
         self._status_labels = {}
-        
-        deps_to_check = [
-            ("opencv", "OpenCV", ["cv2"]),
-            ("pytorch", "PyTorch", ["torch"]),
-            ("kornia", "Kornia", ["kornia"]),
-            ("ortools", "OR-Tools", ["ortools"])
+
+        features_to_check = [
+            ("ai_matching", "AI 智能定位", ["torch", "kornia"]),
+            ("advanced_routing", "高级路线规划", ["ortools"]),
+            ("amd_gpu", "AMD/Intel 显卡加速", ["torch_directml"]),
         ]
-        
-        for key, display_name, modules in deps_to_check:
+
+        for key, display_name, modules in features_to_check:
             row = QHBoxLayout()
-            
+
             name_label = QLabel(f"{display_name}:")
             name_label.setStyleSheet(f"color: {TEXT_PRIMARY}; font-size: 12px;")
-            name_label.setMinimumWidth(100)
+            name_label.setMinimumWidth(140)
             row.addWidget(name_label)
-            
+
             status_label = QLabel("检查中...")
             status_label.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 12px;")
-            self._status_labels[key] = status_label
+            self._status_labels[key] = (status_label, modules)
             row.addWidget(status_label)
-            
+
             row.addStretch()
             status_layout.addLayout(row)
-        
+
         # 刷新按钮
         refresh_btn = NeumorphicButton("刷新状态")
         refresh_btn.clicked.connect(self._refresh_dep_status)
@@ -423,9 +445,10 @@ class SettingsDialog(QDialog):
         layout.addSpacing(10)
         info_label = QLabel(
             "说明：\n"
-            "• 使用依赖管理器可以安装/卸载所有可选依赖\n"
-            "• 基础依赖会在程序启动时自动检查和修复\n"
-            "• OpenCV CUDA 版本如果加载失败会自动切换到 CPU 版本"
+            "• 使用功能管理器安装/卸载可选功能\n"
+            "• 基础依赖（OpenCV、PyQt5 等）在启动时自动检查\n"
+            "• NVIDIA 显卡用户安装 AI 智能定位后自动启用 GPU 加速\n"
+            "• AMD/Intel 显卡用户需额外安装「AMD/Intel 显卡加速」"
         )
         info_label.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 10px;")
         info_label.setWordWrap(True)
@@ -444,45 +467,20 @@ class SettingsDialog(QDialog):
     # ── Dependency helpers ────────────────────────────────────────────
 
     def _refresh_dep_status(self):
-        """刷新依赖状态"""
+        """刷新功能状态"""
         import importlib
         importlib.invalidate_caches()
-        
-        # 检查 OpenCV
-        opencv_installed = self._check_module_installed("cv2")
-        if opencv_installed:
-            self._status_labels["opencv"].setText("✓ 已安装")
-            self._status_labels["opencv"].setStyleSheet(f"color: {SUCCESS}; font-size: 12px;")
-        else:
-            self._status_labels["opencv"].setText("○ 未安装")
-            self._status_labels["opencv"].setStyleSheet(f"color: {TEXT_DISABLED}; font-size: 12px;")
-        
-        # 检查 PyTorch
-        pytorch_installed = self._check_module_installed("torch")
-        if pytorch_installed:
-            self._status_labels["pytorch"].setText("✓ 已安装")
-            self._status_labels["pytorch"].setStyleSheet(f"color: {SUCCESS}; font-size: 12px;")
-        else:
-            self._status_labels["pytorch"].setText("○ 未安装")
-            self._status_labels["pytorch"].setStyleSheet(f"color: {TEXT_DISABLED}; font-size: 12px;")
-        
-        # 检查 Kornia
-        kornia_installed = self._check_module_installed("kornia")
-        if kornia_installed:
-            self._status_labels["kornia"].setText("✓ 已安装")
-            self._status_labels["kornia"].setStyleSheet(f"color: {SUCCESS}; font-size: 12px;")
-        else:
-            self._status_labels["kornia"].setText("○ 未安装")
-            self._status_labels["kornia"].setStyleSheet(f"color: {TEXT_DISABLED}; font-size: 12px;")
-        
-        # 检查 OR-Tools
-        ortools_installed = self._check_module_installed("ortools")
-        if ortools_installed:
-            self._status_labels["ortools"].setText("✓ 已安装")
-            self._status_labels["ortools"].setStyleSheet(f"color: {SUCCESS}; font-size: 12px;")
-        else:
-            self._status_labels["ortools"].setText("○ 未安装")
-            self._status_labels["ortools"].setStyleSheet(f"color: {TEXT_DISABLED}; font-size: 12px;")
+
+        for key, (status_label, modules) in self._status_labels.items():
+            all_installed = all(
+                self._check_module_installed(m) for m in modules
+            )
+            if all_installed:
+                status_label.setText("✓ 已启用")
+                status_label.setStyleSheet(f"color: {SUCCESS}; font-size: 12px;")
+            else:
+                status_label.setText("○ 未安装")
+                status_label.setStyleSheet(f"color: {TEXT_DISABLED}; font-size: 12px;")
 
     def _on_repair_base(self):
         """修复基础依赖"""
@@ -547,6 +545,9 @@ class SettingsDialog(QDialog):
         self._settings.set("navigation.route_strategy", strategy_map.get(strategy_text, "auto"))
         self._settings.set("navigation.use_2opt", self._use_2opt.isChecked())
         self._settings.set("navigation.max_route_points", self._max_route_points.value())
+        # GPU type
+        gpu_keys = ["auto", "cuda", "directml", "cpu"]
+        self._settings.set("performance.gpu_type", gpu_keys[self._gpu_type.currentIndex()])
         self._settings.save()
         logger.info("Settings saved")
         self.settings_changed.emit()
