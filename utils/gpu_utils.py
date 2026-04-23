@@ -76,7 +76,7 @@ class GPUManager:
         except (ImportError, Exception):
             pass
 
-        # Method 4: Check nvidia-smi
+        # Method 4: Check nvidia-smi (仅记录硬件信息，不标记为可用——无运行时支撑)
         try:
             import subprocess
             result = subprocess.run(
@@ -85,14 +85,15 @@ class GPUManager:
             )
             if result.returncode == 0 and result.stdout.strip():
                 gpus = result.stdout.strip().split('\n')
-                self.gpu_available = True
                 self.device_count = len(gpus)
-                self.gpu_type = "cuda"
                 for i, name in enumerate(gpus):
                     self._device_info[i] = {
                         "device_id": i, "name": name.strip(), "type": "cuda",
                     }
-                logger.info("GPU detected via nvidia-smi: %s", gpus)
+                logger.info("NVIDIA GPU hardware detected via nvidia-smi: %s "
+                            "(no CUDA runtime available, install torch with CUDA "
+                            "to enable GPU acceleration)", gpus)
+                # gpu_available 保持 False — 有硬件但无运行时
                 return
         except (FileNotFoundError, subprocess.TimeoutExpired, Exception):
             pass
@@ -157,10 +158,13 @@ class GPUManager:
             return False
         
         try:
-            import cv2
-            cv2.cuda.setDevice(device_id)
+            if self.gpu_type == "cuda":
+                import cv2
+                cv2.cuda.setDevice(device_id)
+            elif self.gpu_type == "directml":
+                pass  # DirectML 无需 cv2.cuda 初始化
             self.cuda_enabled = True
-            logger.info(f"已启用 GPU 加速 (设备 {device_id})")
+            logger.info(f"已启用 GPU 加速 (设备 {device_id}, type={self.gpu_type})")
             return True
         except Exception as e:
             logger.error(f"启用 GPU 失败: {e}")
@@ -202,26 +206,35 @@ class GPUManager:
         """
         return self.cuda_enabled
     
-    def get_torch_device(self):
+    def get_torch_device(self, preferred_type: Optional[str] = None):
         """
         返回最佳 torch device，供 LightGlue/LoFTR 等深度学习模块使用。
 
-        优先级: CUDA > DirectML > CPU
+        Args:
+            preferred_type: 用户偏好 ("cuda", "directml", "cpu", "auto"/None)
+                           来自 settings.get("performance.gpu_type")
+
+        优先级: 用户偏好 > CUDA > DirectML > CPU
         """
         try:
             import torch
         except ImportError:
             return None
 
-        if torch.cuda.is_available():
-            return torch.device("cuda")
+        if preferred_type == "cpu":
+            return torch.device("cpu")
 
-        try:
-            import torch_directml
-            if torch_directml.device_count() > 0:
-                return torch_directml.device(0)
-        except ImportError:
-            pass
+        if preferred_type in (None, "auto", "cuda"):
+            if torch.cuda.is_available():
+                return torch.device("cuda")
+
+        if preferred_type in (None, "auto", "directml"):
+            try:
+                import torch_directml
+                if torch_directml.device_count() > 0:
+                    return torch_directml.device(0)
+            except ImportError:
+                pass
 
         return torch.device("cpu")
 

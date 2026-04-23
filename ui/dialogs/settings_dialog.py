@@ -13,7 +13,7 @@ from PyQt5.QtWidgets import (
     QTabWidget, QWidget, QScrollArea, QTextEdit,
     QMessageBox, QFrame
 )
-from PyQt5.QtCore import Qt, pyqtSignal, QProcess, QTimer
+from PyQt5.QtCore import Qt, pyqtSignal
 
 from ...config.settings import Settings
 from ..widgets.neumorphic import (
@@ -504,21 +504,41 @@ class SettingsDialog(QDialog):
         self._repair_btn.setEnabled(False)
         self._repair_btn.setText("修复中...")
 
-        import subprocess
-        try:
-            result = subprocess.run(
-                [sys.executable, "-m", "pip", "install", "-r", req_path],
-                capture_output=True, text=True, timeout=300
-            )
-            if result.returncode == 0:
-                QMessageBox.information(self, "成功", "基础依赖修复完成！")
-            else:
-                QMessageBox.critical(self, "失败", f"修复失败:\n{result.stderr[:300]}")
-        except Exception as e:
-            QMessageBox.critical(self, "错误", f"修复过程出错:\n{str(e)}")
-        finally:
+        from PyQt5.QtCore import QThread, pyqtSignal
+
+        class _RepairThread(QThread):
+            finished = pyqtSignal(bool, str)
+
+            def __init__(self, req_path):
+                super().__init__()
+                self._req_path = req_path
+
+            def run(self):
+                import subprocess
+                try:
+                    result = subprocess.run(
+                        [sys.executable, "-m", "pip", "install",
+                         "-r", self._req_path],
+                        capture_output=True, text=True, timeout=300
+                    )
+                    if result.returncode == 0:
+                        self.finished.emit(True, "基础依赖修复完成！")
+                    else:
+                        self.finished.emit(False, f"修复失败:\n{result.stderr[:300]}")
+                except Exception as e:
+                    self.finished.emit(False, f"修复过程出错:\n{str(e)}")
+
+        def _on_repair_done(success, msg):
             self._repair_btn.setEnabled(True)
             self._repair_btn.setText("修复基础依赖")
+            if success:
+                QMessageBox.information(self, "成功", msg)
+            else:
+                QMessageBox.critical(self, "失败", msg)
+
+        self._repair_thread = _RepairThread(req_path)
+        self._repair_thread.finished.connect(_on_repair_done)
+        self._repair_thread.start()
 
     def _restore_install_state(self):
         """恢复安装状态（已迁移到依赖管理器）"""

@@ -156,7 +156,7 @@ class LightGlueMatcher:
             rgb = image
 
         # DISK expects [1, 3, H, W] float in [0, 1]
-        tensor = torch.from_numpy(rgb.copy()).float() / 255.0
+        tensor = torch.from_numpy(np.ascontiguousarray(rgb)).float() / 255.0
         tensor = tensor.permute(2, 0, 1).unsqueeze(0)  # [H,W,3] -> [1,3,H,W]
         return tensor.to(self._device)
 

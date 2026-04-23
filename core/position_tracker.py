@@ -313,7 +313,7 @@ class PositionTracker:
         mh = self._map_manager.map_height
 
         # 计算所有窗口位置
-        if not hasattr(self, '_scan_positions') or not self._scan_positions:
+        if not self._scan_positions:
             self._scan_positions = [
                 (x, y)
                 for y in range(0, mh, step)
@@ -395,6 +395,9 @@ class PositionTracker:
                     min(h, w), self._detector._ring_outer, self._detector._ring_inner)
 
             matched = False
+            match_pos = None
+            match_conf = 0.0
+            match_label = ""
 
             # Step 1: SIFT 预计算局部搜索（~5ms，任何模式都先跑）
             result_sift = self._detector._sift_matcher.match_precomputed(

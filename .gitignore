@@ -53,3 +53,6 @@ assets/icons/wiki/*.png
 
 # User config (contains calibration data, not portable)
 data_files/config.json
+
+# Runtime cache
+data_files/wiki_cache.json

@@ -327,8 +327,8 @@ class SIFTMatcher:
 
         # FLANN match
         try:
-            if search_center is not None and len(map_des) < len(self._map_descriptors):
-                # For local subsets, BFMatcher is faster than building a new FLANN index
+            if search_center is not None:
+                # 局部子集：BFMatcher 更快，且避免 FLANN trainIdx 与子集索引不一致
                 bf = cv2.BFMatcher(cv2.NORM_L2)
                 matches = bf.knnMatch(des1, map_des, k=2)
             else:

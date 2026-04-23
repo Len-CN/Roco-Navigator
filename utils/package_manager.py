@@ -112,7 +112,7 @@ class PackageManager:
             try:
                 with open(self.cache_meta, 'r') as f:
                     return json.load(f)
-            except:
+            except Exception:
                 return {}
         return {}
     
@@ -140,7 +140,7 @@ class PackageManager:
                 timeout=10
             )
             return result.returncode == 0
-        except:
+        except Exception:
             return False
     
     def get_installed_packages(self) -> List[str]:
@@ -217,9 +217,9 @@ class PackageManager:
         
         cmd = [self.python_exe, "-m", "pip", "install", package_name, "--no-cache-dir"]
         
-        # 添加 index-url（如果有）
+        # 添加额外索引源（保留默认 PyPI 以解析子依赖）
         if "index_url" in config:
-            cmd.extend(["--index-url", config["index_url"]])
+            cmd.extend(["--extra-index-url", config["index_url"]])
         
         try:
             process = subprocess.Popen(
@@ -449,13 +449,13 @@ class PackageManager:
         for file in self.cache_dir.glob("*.whl"):
             try:
                 file.unlink()
-            except:
+            except Exception:
                 pass
         
         for file in self.cache_dir.glob("*.tmp"):
             try:
                 file.unlink()
-            except:
+            except Exception:
                 pass
 
 

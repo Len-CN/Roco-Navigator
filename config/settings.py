@@ -68,7 +68,8 @@ class Settings:
             "arrival_distance": 20,       # 到达判定距离 (像素)
             "route_strategy": "nearest",  # 默认路线策略
             "use_2opt": True,             # 使用 2-opt 优化
-            "show_eta": True              # 显示预计到达时间
+            "show_eta": True,             # 显示预计到达时间
+            "max_route_points": 2000      # 路线最大点位数
         },
         "logging": {
             "level": "INFO",

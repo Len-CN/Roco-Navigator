@@ -5,11 +5,10 @@
 """
 
 from PyQt5.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QListWidget, QListWidgetItem, QTextEdit, QProgressBar, QMessageBox
+    QDialog, QVBoxLayout, QHBoxLayout, QLabel,
+    QListWidget, QListWidgetItem, QTextEdit, QMessageBox
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
-from PyQt5.QtGui import QFont
 
 from ...utils.package_manager import PackageManager
 from ..widgets.neumorphic import (
@@ -233,6 +232,8 @@ class DependencyDialog(QDialog):
     
     def _start_installation(self, feature_key: str):
         """开始安装功能"""
+        if hasattr(self, 'install_thread') and self.install_thread and self.install_thread.isRunning():
+            return
         self.install_btn.setEnabled(False)
         self.uninstall_btn.setEnabled(False)
         self.refresh_btn.setEnabled(False)
@@ -311,14 +312,37 @@ class DependencyDialog(QDialog):
             return
 
         self._log(f"\n卸载「{feat['feature_name']}」...")
-        success, log = self.manager.uninstall_feature(feature_key,
-                                                       lambda msg: self._log(msg))
+        self.install_btn.setEnabled(False)
+        self.uninstall_btn.setEnabled(False)
 
-        if success:
-            self._log("✓ 卸载成功")
-            QMessageBox.information(self, "成功", "卸载完成！")
-        else:
-            self._log(f"✗ 卸载失败\n{log}")
-            QMessageBox.critical(self, "失败", f"卸载失败：\n{log[:200]}")
+        from PyQt5.QtCore import QThread, pyqtSignal
 
-        self._refresh_status()
+        class _UninstallThread(QThread):
+            finished = pyqtSignal(bool, str)
+            log_msg = pyqtSignal(str)
+
+            def __init__(self, manager, feature_key):
+                super().__init__()
+                self._manager = manager
+                self._feature_key = feature_key
+
+            def run(self):
+                success, log = self._manager.uninstall_feature(
+                    self._feature_key, lambda msg: self.log_msg.emit(msg))
+                self.finished.emit(success, log)
+
+        def _on_uninstall_done(success, log):
+            self.install_btn.setEnabled(True)
+            self.uninstall_btn.setEnabled(True)
+            if success:
+                self._log("✓ 卸载成功")
+                QMessageBox.information(self, "成功", "卸载完成！")
+            else:
+                self._log(f"✗ 卸载失败\n{log}")
+                QMessageBox.critical(self, "失败", f"卸载失败：\n{log[:200]}")
+            self._refresh_status()
+
+        self._uninstall_thread = _UninstallThread(self.manager, feature_key)
+        self._uninstall_thread.log_msg.connect(self._log)
+        self._uninstall_thread.finished.connect(_on_uninstall_done)
+        self._uninstall_thread.start()
