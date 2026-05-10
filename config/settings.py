@@ -69,7 +69,10 @@ class Settings:
             "route_strategy": "nearest",  # 默认路线策略
             "use_2opt": True,             # 使用 2-opt 优化
             "show_eta": True,             # 显示预计到达时间
-            "max_route_points": 2000      # 路线最大点位数
+            "max_route_points": 2000,     # 路线最大点位数
+            "use_teleport_hubs": True,    # 利用庇护所/传送点作为瞬移枢纽
+            "route_endpoint": "open",     # 终点策略: open / loop / manual
+            "teleport_cost_px": 150       # hub 之间瞬移的代价 (像素等价值)
         },
         "logging": {
             "level": "INFO",

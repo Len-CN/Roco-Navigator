@@ -2,6 +2,7 @@
 路线规划
 
 方向扫描 (Directional Sweep) 算法，适合游戏跑图资源收集。
+支持「传送中继点」（庇护所/小庇护所/传送点）作为零代价瞬移枢纽。
 
 原则：单向推进、少回头、就近优先、散点顺路收割、
       密集区连贯清扫、不跨地图乱跳、总路径最短且平滑。
@@ -10,7 +11,8 @@
 import logging
 import math
 import time
-from typing import List, Tuple
+from dataclasses import dataclass, field
+from typing import List, Optional, Set, Tuple
 from statistics import median
 
 try:
@@ -22,6 +24,11 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+# 可作为传送中继点的细分类名（mark_type_name）
+# 仅「传送点」是真传送，庇护所是营地无瞬移功能
+TELEPORT_HUB_TYPES = frozenset({"传送点"})
+
+
 def distance(p1: Tuple[float, float], p2: Tuple[float, float]) -> float:
     """两点间的欧氏距离"""
     dx = p1[0] - p2[0]
@@ -29,9 +36,87 @@ def distance(p1: Tuple[float, float], p2: Tuple[float, float]) -> float:
     return math.sqrt(dx * dx + dy * dy)
 
 
-def total_distance(route: List[Tuple[float, float]]) -> float:
-    """计算路线总距离"""
+def total_distance(route) -> float:
+    """计算路线总距离
+
+    兼容 RoutePlan 与 List[point]：传 RoutePlan 时直接返回 total_cost
+    （包含瞬移收益），传 list 时按欧氏累加（旧行为）。
+    """
+    if isinstance(route, RoutePlan):
+        return route.total_cost
     return sum(distance(route[i], route[i + 1]) for i in range(len(route) - 1))
+
+
+@dataclass
+class RoutePlan:
+    """路线规划结果
+
+    - points: 含起点的访问顺序点列表
+    - teleport_segments: i ∈ set 表示 points[i] -> points[i+1] 是瞬移段
+    - total_cost: 综合代价（瞬移段算 teleport_cost）
+    - used_strategy: 实际使用的算法标识
+
+    透明兼容旧调用：旧代码把返回值当 list[point] 用时，__iter__ /
+    __getitem__ / __len__ 透传到 points。
+    """
+    points: List[Tuple[float, float]]
+    teleport_segments: Set[int] = field(default_factory=set)
+    total_cost: float = 0.0
+    used_strategy: str = ""
+
+    def __iter__(self):
+        return iter(self.points)
+
+    def __getitem__(self, i):
+        return self.points[i]
+
+    def __len__(self):
+        return len(self.points)
+
+
+def _pair_cost(p, q, hub_set, teleport_cost):
+    """段代价：终点是 hub 用 teleport_cost（任意位置可瞬移到 hub），
+    否则按欧氏距离步行。
+    """
+    if q in hub_set:
+        return teleport_cost
+    return distance(p, q)
+
+
+def _route_cost(points, hub_set, teleport_cost):
+    """整条路径的 hub-aware 代价"""
+    return sum(_pair_cost(points[i], points[i + 1], hub_set, teleport_cost)
+               for i in range(len(points) - 1))
+
+
+def _mark_teleport_segments(points, hub_set):
+    """瞬移段：终点是 hub 的段（任何位置都可瞬移到 hub）"""
+    return {i for i in range(len(points) - 1)
+            if points[i + 1] in hub_set}
+
+
+def _compress_hub_chains(points, hub_set):
+    """压缩连续 hub 节点链。
+
+    任意位置都能瞬移到任意 hub，所以连续 hub [..., h1, h2, h3, ...]
+    中前面的 h1, h2 都是冗余 — 直接瞬移到 h3 即可。仅保留链尾。
+    """
+    if len(points) < 2:
+        return list(points)
+    out = [points[0]]
+    i = 1
+    while i < len(points):
+        if points[i] in hub_set:
+            j = i
+            while j + 1 < len(points) and points[j + 1] in hub_set:
+                j += 1
+            # 连续 hub [i..j] 仅保留最后一个
+            out.append(points[j])
+            i = j + 1
+        else:
+            out.append(points[i])
+            i += 1
+    return out
 
 
 class PathPlanner:
@@ -43,6 +128,7 @@ class PathPlanner:
     2. 沿扫描轴自适应分割条带
     3. 蛇形遍历各条带（牛耕式覆盖）
     4. 2-opt 局部优化消除交叉
+    5. （可选）插入 hub 中转节点缩短长段
 
     有 OR-Tools 时 auto 策略优先使用 OR-Tools。
     """
@@ -55,69 +141,103 @@ class PathPlanner:
 
     def plan_route(self, start: Tuple[float, float],
                    targets: List[Tuple[float, float]],
-                   strategy: str = "auto") -> List[Tuple[float, float]]:
+                   strategy: str = "auto",
+                   *,
+                   teleport_hubs: Optional[List[Tuple[float, float]]] = None,
+                   teleport_cost: float = 0.0,
+                   end: Optional[Tuple[float, float]] = None) -> RoutePlan:
         """
         规划从起点经过所有目标点的路线。
 
         Args:
             start: 起始坐标 (x, y)
-            targets: 目标点列表 [(x, y), ...]
+            targets: 必访目标点列表 [(x, y), ...]
             strategy: "auto" / "nearest" / "ortools"
+            teleport_hubs: 可作为瞬移枢纽的点列表（如庇护所/传送点）
+            teleport_cost: hub 之间瞬移的代价（默认 0）
+            end: 终点策略
+                None    → 开放路径（停在最后一个点）
+                =start  → 环形（回到起点）
+                =(x,y)  → 必须以指定点结束
 
         Returns:
-            有序路线 [start, target1, target2, ...]
+            RoutePlan
         """
+        hubs = list(teleport_hubs) if teleport_hubs else []
+        hub_set = set(hubs)
+        # 起点/终点/必访 target 撞 hub 时，从 hub_set 中剔除（hub 仅作辅助节点）
+        hub_set.discard(tuple(start))
+        if end is not None:
+            hub_set.discard(tuple(end))
+        target_set = set(targets) if targets else set()
+        hub_set -= target_set
+        hubs = [h for h in hubs if h in hub_set]
+
         if not targets:
-            return [start]
-        if len(targets) == 1:
-            return [start, targets[0]]
+            points = [start] if end is None else [start, end]
+            return RoutePlan(points=points, teleport_segments=set(),
+                             total_cost=_route_cost(points, hub_set, teleport_cost),
+                             used_strategy="trivial")
 
         start_time = time.perf_counter()
 
-        if strategy == "nearest":
-            route = self._nn_route(start, list(targets))
-            if self._use_2opt:
-                route = self._optimize_2opt(route)
-        elif strategy == "ortools" and HAS_ORTOOLS:
-            route = self._solve_ortools(start, list(targets))
-        elif strategy == "auto" and HAS_ORTOOLS:
-            # 有 OR-Tools 时优先使用
-            route = self._solve_ortools(start, list(targets))
+        # 选择算法
+        use_ortools = HAS_ORTOOLS and strategy in ("auto", "ortools")
+        if strategy == "ortools" and not HAS_ORTOOLS:
+            logger.warning("OR-Tools not available, falling back")
+
+        # 阶段 1: 纯欧氏求解 target 顺序（不考虑 hub，避免组内乱跳）
+        if use_ortools:
+            points, used = self._solve_ortools(start, list(targets), end)
+        elif strategy == "nearest" or len(targets) <= 2:
+            points = self._nn_route(start, list(targets), end)
+            used = "nearest"
         else:
-            # 无 OR-Tools 时使用方向扫描（≤2 个点时最近邻即最优）
-            if len(targets) <= 2:
-                route = self._nn_route(start, list(targets))
-            else:
-                route = self._sweep_route(start, list(targets))
+            points = self._sweep_route(start, list(targets), end)
+            used = "sweep"
+
+        # 阶段 2: 2-opt 按欧氏距离消除交叉
+        if self._use_2opt and len(points) >= 4:
+            points = self._optimize_2opt_euclidean(
+                points, fix_last=(end is not None))
+
+        # 阶段 3: 仅在显著长段插入 hub 瞬移（保持组内连续）
+        if hubs:
+            points = self._post_insert_hubs(points, hubs, hub_set, teleport_cost)
+
+        # 阶段 4: 压缩连续 hub（罕见，但稳妥处理）
+        points = _compress_hub_chains(points, hub_set)
+
+        teleport_segments = _mark_teleport_segments(points, hub_set)
+        cost = _route_cost(points, hub_set, teleport_cost)
 
         elapsed = time.perf_counter() - start_time
-        dist = total_distance(route)
-        logger.info("Route planned: %d targets, %.0f distance, %.2fs "
-                     "(strategy=%s, ortools=%s)",
-                     len(targets), dist, elapsed, strategy, HAS_ORTOOLS)
-        return route
+        logger.info(
+            "Route planned: %d targets, %d hubs, %d teleport segs, "
+            "cost=%.0f, %.2fs (strategy=%s, ortools=%s)",
+            len(targets), len(hubs), len(teleport_segments),
+            cost, elapsed, used, HAS_ORTOOLS)
+
+        return RoutePlan(points=points, teleport_segments=teleport_segments,
+                         total_cost=cost, used_strategy=used)
 
     # ==================== 方向扫描算法 ====================
 
-    def _sweep_route(self, start, targets):
+    def _sweep_route(self, start, targets, end):
         """
-        方向扫描主算法
-
-        沿点云主方向推进，蛇形扫描覆盖所有点位。
+        方向扫描主算法（不含 hub 处理，hub 由后处理统一插入）。
         """
-        # Phase 1: 确定扫描方向
         axis = self._compute_sweep_axis(start, targets)
-        perp = (-axis[1], axis[0])  # 垂直轴
-
-        # Phase 2: 自适应条带分割
+        perp = (-axis[1], axis[0])
         strips = self._split_into_strips(targets, start, axis)
-
-        # Phase 3: 蛇形遍历
         route = self._serpentine_traverse(start, strips, perp)
 
-        # Phase 4: 2-opt 局部优化
-        if self._use_2opt:
-            route = self._optimize_2opt(route)
+        # 处理 end 语义
+        if end is not None and (not route or route[-1] != end):
+            if end in route[1:]:
+                route = [p for p in route if p != end] + [end]
+            else:
+                route.append(end)
 
         return route
 
@@ -254,28 +374,103 @@ class PathPlanner:
 
         return route
 
+    def _post_insert_hubs(self, route, hubs, hub_set, teleport_cost):
+        """后处理：仅在显著长段插入 hub 瞬移。
+
+        阈值用相邻段长度的中位数 * 2，配合下限保证短数据集行为合理。
+        这样：
+          - 组内短段不被瞬移打断（整组连续步行）
+          - 组间长段才用瞬移连接（地图上虚线少而集中）
+          - 整条路径仍是单条折线，无分支
+        """
+        if not hubs or len(route) < 2:
+            return route
+
+        seg_lens = [distance(route[i], route[i + 1])
+                    for i in range(len(route) - 1)]
+        if not seg_lens:
+            return route
+
+        sorted_lens = sorted(seg_lens)
+        median_d = sorted_lens[len(sorted_lens) // 2]
+        # 长段判定阈值：中位数 * 2，至少 100px
+        threshold = max(median_d * 2.0, 100.0)
+
+        out = [route[0]]
+        for i in range(len(route) - 1):
+            a, b = route[i], route[i + 1]
+            # 终点本身是 hub：直接瞬移过去
+            if b in hub_set:
+                out.append(b)
+                continue
+
+            direct = seg_lens[i]
+            # 短段不插 hub，保持组内连续
+            if direct < threshold:
+                out.append(b)
+                continue
+
+            # 长段：找 b 附近最近 hub
+            best_h = None
+            best_cost = direct
+            for h in hubs:
+                via = teleport_cost + distance(h, b)
+                if via < best_cost:
+                    best_cost = via
+                    best_h = h
+            if best_h is not None:
+                out.append(best_h)
+            out.append(b)
+        return out
+
     # ==================== 最近邻 ====================
 
-    def _nn_route(self, start, targets):
-        """最近邻贪心算法（小规模回退用）"""
+    def _nn_route(self, start, targets, end):
+        """最近邻贪心（不含 hub，hub 由后处理统一插入）。"""
+        explicit_end = None
+        if end is not None and end != start:
+            if end in targets:
+                targets = [t for t in targets if t != end]
+            explicit_end = end
+
         route = [start]
-        remaining = set(range(len(targets)))
+        remaining = list(targets)
         current = start
+
         while remaining:
-            nearest_idx = min(remaining, key=lambda i: distance(current, targets[i]))
-            remaining.remove(nearest_idx)
-            route.append(targets[nearest_idx])
-            current = targets[nearest_idx]
+            best_idx = 0
+            best_cost = distance(current, remaining[0])
+            for i in range(1, len(remaining)):
+                d = distance(current, remaining[i])
+                if d < best_cost:
+                    best_cost = d
+                    best_idx = i
+            chosen = remaining.pop(best_idx)
+            route.append(chosen)
+            current = chosen
+
+        # end 语义
+        if end is not None and end == start:
+            route.append(start)
+        elif explicit_end is not None:
+            route.append(explicit_end)
+
         return route
 
     # ==================== 2-opt 优化 ====================
 
-    def _optimize_2opt(self, route, max_time=2.0):
-        """2-opt 优化，O(1) delta 计算"""
+    def _optimize_2opt_euclidean(self, route, max_time=2.0, fix_last=False):
+        """2-opt 优化（纯欧氏，作用在 target 序列上，hub 由后处理插入）。
+
+        Args:
+            fix_last: 若为 True，禁止反转涉及末尾点的段（保留固定终点）。
+        """
         if len(route) < 4:
             return route
 
         best = list(route)
+        j_upper = len(best) - 1 if fix_last else len(best)
+
         improved = True
         iterations = 0
         start_time = time.perf_counter()
@@ -288,7 +483,7 @@ class PathPlanner:
                 break
 
             for i in range(1, len(best) - 2):
-                for j in range(i + 2, len(best)):
+                for j in range(i + 2, j_upper):
                     d_old = distance(best[i - 1], best[i])
                     d_new = distance(best[i - 1], best[j])
 
@@ -307,49 +502,79 @@ class PathPlanner:
 
     # ==================== OR-Tools ====================
 
-    def _solve_ortools(self, start, targets):
-        """Google OR-Tools 求解（有 OR-Tools 时的最优解）"""
-        all_points = [start] + list(targets)
-        n = len(all_points)
+    def _solve_ortools(self, start, targets, end):
+        """Google OR-Tools 求解（纯欧氏 target 排序，hub 由后处理插入）。
 
-        # 构建距离矩阵
+        节点布局：[start] + targets (+ optional end_node) (+ optional dummy)
+        - end=None  → 追加 dummy，dummy 到任何点距离 0（开放路径）
+        - end=start → start 同时作为终点（环形）
+        - end=(x,y) → 把 end 作为单独节点固定为终点
+        """
+        nodes = [start] + list(targets)
+        dummy_idx = None
+
+        if end is None:
+            nodes.append(("__DUMMY__",))
+            dummy_idx = len(nodes) - 1
+            end_idx = dummy_idx
+        elif end == start:
+            end_idx = 0
+        else:
+            try:
+                end_idx = nodes.index(end)
+            except ValueError:
+                nodes.append(end)
+                end_idx = len(nodes) - 1
+
+        n = len(nodes)
         dist_matrix = [[0] * n for _ in range(n)]
         for i in range(n):
             for j in range(n):
-                if i != j:
-                    dist_matrix[i][j] = int(distance(all_points[i], all_points[j]))
+                if i == j:
+                    continue
+                if dummy_idx is not None and (i == dummy_idx or j == dummy_idx):
+                    dist_matrix[i][j] = 0
+                else:
+                    dist_matrix[i][j] = int(round(distance(nodes[i], nodes[j])))
 
-        manager = pywrapcp.RoutingIndexManager(n, 1, 0)
-        routing = pywrapcp.RoutingModel(manager)
+        try:
+            manager = pywrapcp.RoutingIndexManager(n, 1, [0], [end_idx])
+            routing = pywrapcp.RoutingModel(manager)
 
-        def dist_callback(from_idx, to_idx):
-            from_node = manager.IndexToNode(from_idx)
-            to_node = manager.IndexToNode(to_idx)
-            return dist_matrix[from_node][to_node]
+            def dist_callback(from_idx, to_idx):
+                return dist_matrix[manager.IndexToNode(from_idx)][manager.IndexToNode(to_idx)]
 
-        transit_id = routing.RegisterTransitCallback(dist_callback)
-        routing.SetArcCostEvaluatorOfAllVehicles(transit_id)
+            transit_id = routing.RegisterTransitCallback(dist_callback)
+            routing.SetArcCostEvaluatorOfAllVehicles(transit_id)
 
-        search_params = pywrapcp.DefaultRoutingSearchParameters()
-        search_params.first_solution_strategy = (
-            routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
-        )
-        search_params.local_search_metaheuristic = (
-            routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
-        )
-        time_limit = min(10, max(1, n // 50))
-        search_params.time_limit.FromSeconds(time_limit)
+            search_params = pywrapcp.DefaultRoutingSearchParameters()
+            search_params.first_solution_strategy = (
+                routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
+            )
+            search_params.local_search_metaheuristic = (
+                routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
+            )
+            time_limit = min(10, max(1, n // 50))
+            search_params.time_limit.FromSeconds(time_limit)
 
-        solution = routing.SolveWithParameters(search_params)
+            solution = routing.SolveWithParameters(search_params)
+        except Exception as e:
+            logger.warning("OR-Tools error (%s), falling back to sweep", e)
+            return self._sweep_route(start, list(targets), end), "sweep_fallback"
+
         if solution is None:
-            logger.warning("OR-Tools failed, falling back to sweep")
-            return self._sweep_route(start, list(targets))
+            logger.warning("OR-Tools no solution, falling back to sweep")
+            return self._sweep_route(start, list(targets), end), "sweep_fallback"
 
         route = []
         index = routing.Start(0)
         while not routing.IsEnd(index):
             node = manager.IndexToNode(index)
-            route.append(all_points[node])
+            if dummy_idx is None or node != dummy_idx:
+                route.append(nodes[node])
             index = solution.Value(routing.NextVar(index))
+        end_node = manager.IndexToNode(index)
+        if dummy_idx is None or end_node != dummy_idx:
+            route.append(nodes[end_node])
 
-        return route
+        return route, "ortools"

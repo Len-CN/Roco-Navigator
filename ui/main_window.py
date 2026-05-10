@@ -68,23 +68,38 @@ class WikiUpdateWorker(QThread):
 
 
 class RouteWorker(QThread):
-    """路线规划后台线程"""
-    finished = pyqtSignal(list, float, list)
+    """路线规划后台线程
 
-    def __init__(self, planner, start_pos, resources, strategy):
+    finished payload: (RoutePlan, distance, names)
+    """
+    finished = pyqtSignal(object, float, list)
+
+    def __init__(self, planner, start_pos, resources, strategy,
+                 teleport_hubs=None, end=None, teleport_cost=0.0):
         super().__init__()
         self._planner = planner
         self._start = start_pos or (resources[0]["x"], resources[0]["y"])
         self._resources = resources
         self._strategy = strategy
+        self._teleport_hubs = list(teleport_hubs) if teleport_hubs else []
+        self._end = end
+        self._teleport_cost = teleport_cost
+
+    @property
+    def teleport_hubs(self):
+        """让回调用同一份 hubs 比对，避免重复计算引发的浮点漂移误差。"""
+        return self._teleport_hubs
 
     def run(self):
-        from ..core.pathfinding import total_distance
         targets = [(r["x"], r["y"]) for r in self._resources]
         names = [r.get("name", "") for r in self._resources]
-        route = self._planner.plan_route(self._start, targets, self._strategy)
-        dist = total_distance(route)
-        self.finished.emit(route, dist, names)
+        plan = self._planner.plan_route(
+            self._start, targets, self._strategy,
+            teleport_hubs=self._teleport_hubs,
+            teleport_cost=self._teleport_cost,
+            end=self._end,
+        )
+        self.finished.emit(plan, plan.total_cost, names)
 
 
 # ==================== 状态栏 ====================
@@ -443,6 +458,33 @@ class MainWindow(QMainWindow):
         logger.info("Filter changed: %d selected (%d points)",
                      len(selected_names) if selected_names else 0, len(display))
 
+    def _get_hubs(self):
+        """获取传送中继点坐标列表（按 settings 控制启停）"""
+        from ..core.pathfinding import TELEPORT_HUB_TYPES
+        if not self._settings.get("navigation.use_teleport_hubs", True):
+            return []
+        return [(r.x, r.y) for r in self._resource_manager.get_all()
+                if r.mark_type_name in TELEPORT_HUB_TYPES]
+
+    def _get_endpoint_mode(self):
+        """从 settings 读终点策略。返回 'open' / 'loop'"""
+        return self._settings.get("navigation.route_endpoint", "open")
+
+    def _build_route_kwargs(self, start):
+        """从 settings + ResourceManager + sidebar 抽取规划参数。
+
+        Args:
+            start: 实际使用的起点 (x, y)。环形模式下 end == start，必须传入
+                   实际起点（不能依赖 tracker.position，可能为 None）。
+        Returns:
+            (teleport_hubs, end, teleport_cost)
+        """
+        hubs = self._get_hubs()
+        endpoint = self._get_endpoint_mode()
+        end = tuple(start) if endpoint == "loop" else None
+        teleport_cost = float(self._settings.get("navigation.teleport_cost_px", 150))
+        return hubs, end, teleport_cost
+
     def _on_plan_route_for_type(self, selected_names):
         """为选中类型的资源规划路线 - selected_names is a set of mark_type_name strings"""
         if selected_names:
@@ -461,36 +503,65 @@ class MainWindow(QMainWindow):
                                     "请选择具体的资源类型，或在设置→性能中调整上限。")
             return
 
+        # 防重入：上一次规划还在跑就忽略
+        if (getattr(self, "_route_worker", None) is not None
+                and self._route_worker.isRunning()):
+            logger.info("Plan ignored: previous worker still running")
+            return
+
         self._sidebar.set_nav_progress(0, "正在规划路线...")
 
+        # 显式计算 start，确保环形 end == start（即使 tracker 未追踪）
+        start = self._tracker.position or (resources[0]["x"], resources[0]["y"])
+        hubs, end, teleport_cost = self._build_route_kwargs(start)
+        logger.info("Plan kwargs: start=%s end=%s endpoint=%s hubs=%d cost=%s",
+                    start, end, self._get_endpoint_mode(), len(hubs), teleport_cost)
         # Run in background
         self._route_worker = RouteWorker(
-            self._path_planner, self._tracker.position, resources,
-            self._settings.get("navigation.route_strategy", "nearest")
+            self._path_planner, start, resources,
+            self._settings.get("navigation.route_strategy", "nearest"),
+            teleport_hubs=hubs, end=end, teleport_cost=teleport_cost
         )
         self._route_worker.finished.connect(self._on_route_planned)
         self._route_worker.start()
 
-    def _on_route_planned(self, route, dist, names):
-        """路线规划完成回调"""
-        if not route or len(route) < 2:
+    def _on_route_planned(self, plan, dist, names):
+        """路线规划完成回调
+
+        plan: RoutePlan (含 points / teleport_segments / total_cost / used_strategy)
+        """
+        points = list(plan.points)
+        teleport_segments = plan.teleport_segments
+        if not points or len(points) < 2:
             self._sidebar.set_nav_progress(0, "规划失败")
+            self._map_canvas.clear_route()
+            self._map_canvas.clear_selected_region()
             return
 
         selected = self._sidebar._get_selected_mark_type_names()
         type_name = ", ".join(sorted(selected)) if selected else "全部"
         route_obj = Route(
             id=f"auto_{len(self._route_manager.get_all()) + 1}",
-            name=f"{type_name} ({len(route) - 1} 个点)",
-            targets=route[1:],
+            name=f"{type_name} ({len(points) - 1} 个点)",
+            targets=points[1:],
             total_distance=dist,
-            strategy="nearest",
+            strategy=plan.used_strategy,
         )
         self._route_manager.add(route_obj)
-        self._map_canvas.set_route([(p[0], p[1]) for p in route])
+        # 优先用 worker 持有的 hubs（与 plan_route 同一份引用，避免浮点失配）
+        worker = getattr(self, "_route_worker", None)
+        hubs = list(worker.teleport_hubs) if worker is not None else self._get_hubs()
+        hub_set = set(hubs)
+        hub_indices = {i for i, pt in enumerate(points) if pt in hub_set}
+        self._map_canvas.set_route([(p[0], p[1]) for p in points],
+                                   teleport_segments=teleport_segments,
+                                   hub_indices=hub_indices)
         self._map_canvas.clear_selected_region()
-        self._sidebar.set_nav_progress(0, f"路线: {len(route)-1} 个目标, {dist:.0f}px")
-        logger.info("Route planned: %d targets, %.0f distance", len(route) - 1, dist)
+        tp_hint = f", {len(teleport_segments)} 段瞬移" if teleport_segments else ""
+        self._sidebar.set_nav_progress(
+            0, f"路线: {len(points)-1} 个目标, {dist:.0f}px{tp_hint}")
+        logger.info("Route planned: %d targets, %d teleport segs, %d hubs, %.0f cost",
+                    len(points) - 1, len(teleport_segments), len(hub_indices), dist)
 
     def _on_start_nav(self):
         """开始导航"""
@@ -516,10 +587,10 @@ class MainWindow(QMainWindow):
 
     def _on_target_reached(self, index: int, target):
         logger.info("Target %d reached: (%.0f, %.0f)", index, target[0], target[1])
-        self._map_canvas.set_route(
-            [(p.x(), p.y()) for p in self._map_canvas._route_points],
+        # 仅更新进度，保留瞬移段虚线与 hub 图标
+        self._map_canvas.update_route_progress(
             current_index=index + 1,
-            visited=self._navigator.visited_indices
+            visited=self._navigator.visited_indices,
         )
 
     def _on_waypoint_skip_requested(self, index: int):
@@ -527,8 +598,7 @@ class MainWindow(QMainWindow):
         if not self._navigator.is_active:
             return
         self._navigator.jump_to(index)
-        self._map_canvas.set_route(
-            [(p.x(), p.y()) for p in self._map_canvas._route_points],
+        self._map_canvas.update_route_progress(
             current_index=self._navigator.current_index,
             visited=self._navigator.visited_indices,
         )
@@ -827,12 +897,21 @@ class MainWindow(QMainWindow):
             self._map_canvas.clear_selected_region()
             return
 
+        # 防重入
+        if (getattr(self, "_route_worker", None) is not None
+                and self._route_worker.isRunning()):
+            logger.info("Region plan ignored: previous worker still running")
+            return
+
         self._sidebar.set_data_info(f"区域内 {len(region_resources)} 个点位，正在规划...")
         self._sidebar.set_nav_progress(0, "正在规划路线...")
 
+        start = self._tracker.position or (region_resources[0]["x"], region_resources[0]["y"])
+        hubs, end, teleport_cost = self._build_route_kwargs(start)
         self._route_worker = RouteWorker(
-            self._path_planner, self._tracker.position, region_resources,
-            self._settings.get("navigation.route_strategy", "auto")
+            self._path_planner, start, region_resources,
+            self._settings.get("navigation.route_strategy", "auto"),
+            teleport_hubs=hubs, end=end, teleport_cost=teleport_cost
         )
         self._route_worker.finished.connect(self._on_route_planned)
         self._route_worker.start()

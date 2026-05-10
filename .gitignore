@@ -56,3 +56,4 @@ data_files/config.json
 
 # Runtime cache
 data_files/wiki_cache.json
+data_files/cache/

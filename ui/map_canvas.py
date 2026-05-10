@@ -20,6 +20,10 @@ from PyQt5.QtGui import (
 logger = logging.getLogger(__name__)
 
 
+# 传送点 mark_type ID（来自 wiki_cache.json，"传送点"）
+HUB_MARK_TYPE = 202
+
+
 class MapCanvas(QWidget):
     """地图画布"""
 
@@ -75,6 +79,8 @@ class MapCanvas(QWidget):
         self._route_points: List[QPointF] = []
         self._current_target_index: int = -1
         self._visited_indices: set = set()
+        self._teleport_segments: set = set()  # 段索引集合，i 表示 points[i]->points[i+1] 是瞬移段
+        self._hub_indices: set = set()  # 路径中实际用到的传送点节点索引
 
         # 资源点
         self._resource_points: List[dict] = []
@@ -185,16 +191,40 @@ class MapCanvas(QWidget):
         self.update()
 
     def set_route(self, points: List[Tuple[float, float]], current_index: int = 0,
-                  visited: set = None):
-        """设置路线"""
+                  visited: set = None, teleport_segments: Optional[set] = None,
+                  hub_indices: Optional[set] = None):
+        """设置路线
+
+        Args:
+            points: [(x, y), ...] 路线点列表
+            current_index: 当前目标索引
+            visited: 已访问的索引集合
+            teleport_segments: 瞬移段索引集合，i ∈ set 表示 points[i]->points[i+1]
+                               是瞬移段，绘制为虚线
+            hub_indices: 路径中传送点节点的索引集合，绘制为传送点图标
+        """
         self._route_points = [QPointF(x, y) for x, y in points]
         self._current_target_index = current_index
         self._visited_indices = visited or set()
+        self._teleport_segments = teleport_segments or set()
+        self._hub_indices = hub_indices or set()
         self.update()
 
     def clear_route(self):
         self._route_points = []
         self._current_target_index = -1
+        self._visited_indices = set()
+        self._teleport_segments = set()
+        self._hub_indices = set()
+        self.update()
+
+    def update_route_progress(self, current_index: int, visited: set = None):
+        """仅更新导航进度字段，保留路线/瞬移段/hub 图标。
+
+        用于导航过程中目标递进或跳转，不重新设置整条路线。
+        """
+        self._current_target_index = current_index
+        self._visited_indices = visited or set()
         self.update()
 
     def set_resources(self, resources: List[dict]):
@@ -286,6 +316,9 @@ class MapCanvas(QWidget):
         if self._player_visible:
             self._draw_player(painter)
 
+        # 起点/终点圆环置顶 — 不被玩家箭头盖住
+        self._draw_route_endpoints(painter)
+
     def _draw_placeholder(self, painter: QPainter):
         painter.setPen(QColor("#a0aec0"))
         painter.setFont(QFont("Microsoft YaHei", 16))
@@ -322,6 +355,35 @@ class MapCanvas(QWidget):
         painter.drawEllipse(QPointF(0, 0), 4, 4)
         painter.restore()
 
+    def _draw_route_endpoints(self, painter: QPainter):
+        """起点/终点圆环 — 在玩家箭头之上层绘制，确保可见。"""
+        n = len(self._route_points)
+        if n < 1:
+            return
+        is_loop = (n >= 2 and self._route_points[0] == self._route_points[-1])
+
+        painter.save()
+        # 起点 — 绿色光环（中空），玩家箭头从中露出
+        sp = self.world_to_screen(self._route_points[0].x(),
+                                  self._route_points[0].y())
+        painter.setPen(QPen(QColor("#48bb78"), 3))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawEllipse(sp, 11, 11)
+        if is_loop:
+            # 环形：内嵌红心提示此处亦为终点
+            painter.setBrush(QColor("#e53e3e"))
+            painter.setPen(QPen(QColor("#ffffff"), 1.5))
+            painter.drawEllipse(sp, 4, 4)
+
+        # 终点 — 红实心（仅开放/指定终点；环形已在起点合并显示）
+        if not is_loop and n >= 2:
+            ep = self.world_to_screen(self._route_points[-1].x(),
+                                      self._route_points[-1].y())
+            painter.setBrush(QColor("#e53e3e"))
+            painter.setPen(QPen(QColor("#ffffff"), 2))
+            painter.drawEllipse(ep, 7, 7)
+        painter.restore()
+
     def _draw_route(self, painter: QPainter):
         if len(self._route_points) < 2:
             return
@@ -333,32 +395,60 @@ class MapCanvas(QWidget):
             p1 = self.world_to_screen(self._route_points[i].x(), self._route_points[i].y())
             p2 = self.world_to_screen(self._route_points[i + 1].x(), self._route_points[i + 1].y())
 
-            if i + 1 <= self._current_target_index or (i + 1) in self._visited_indices:
-                # Visited segment — gray
-                pen = QPen(QColor("#c0c4ca"), max(2, int(2 / self._zoom)), Qt.SolidLine)
+            visited = (i + 1 <= self._current_target_index or
+                       (i + 1) in self._visited_indices)
+            is_teleport = i in self._teleport_segments
+            width = max(2, int(2 / self._zoom))
+
+            if visited:
+                # Visited segment — gray (无论是否瞬移)
+                pen = QPen(QColor("#c0c4ca"), width, Qt.SolidLine)
+            elif is_teleport:
+                # Upcoming teleport — purple dashed
+                pen = QPen(QColor("#9b8cff"), width, Qt.DashLine)
             else:
-                # Upcoming segment — accent blue
-                pen = QPen(QColor("#667eea"), max(2, int(2 / self._zoom)), Qt.SolidLine)
+                # Upcoming walk — accent blue solid
+                pen = QPen(QColor("#667eea"), width, Qt.SolidLine)
             pen.setCapStyle(Qt.RoundCap)
             painter.setPen(pen)
             painter.drawLine(p1, p2)
 
-        # Draw waypoints
+        # Draw waypoints (起点/终点由 _draw_route_endpoints 在玩家箭头之上绘制，此处跳过)
+        n = len(self._route_points)
+        is_loop = (n >= 2 and self._route_points[0] == self._route_points[-1])
+
         for i, pt in enumerate(self._route_points):
             sp = self.world_to_screen(pt.x(), pt.y())
-            r = 5
 
+            is_start = (i == 0)
+            is_end = (i == n - 1) and n >= 2
+
+            # 起点和终点都延后到 _draw_route_endpoints
+            if is_start or is_end:
+                continue
+
+            if i in self._hub_indices:
+                # 路径用到的传送点 — 直接画图标
+                icon = self._icon_cache.get(HUB_MARK_TYPE)
+                if icon is not None:
+                    half = self._icon_size // 2
+                    painter.drawPixmap(int(sp.x() - half), int(sp.y() - half), icon)
+                else:
+                    # 图标缺失 → 紫色圆点（与瞬移段同色）
+                    painter.setBrush(QColor("#9b8cff"))
+                    painter.setPen(QPen(QColor("#ffffff"), 1.5))
+                    painter.drawEllipse(sp, 6, 6)
+                continue
+
+            r = 5
             if i == self._current_target_index:
-                # Current target — green
                 painter.setBrush(QColor("#48bb78"))
                 painter.setPen(QPen(QColor("#ffffff"), 2))
                 r = 7
             elif i in self._visited_indices or i < self._current_target_index:
-                # Visited — gray
                 painter.setBrush(QColor("#a0aec0"))
                 painter.setPen(QPen(QColor("#d1d5db"), 1))
             else:
-                # Upcoming — accent
                 painter.setBrush(QColor("#667eea"))
                 painter.setPen(QPen(QColor("#ffffff"), 1.5))
 

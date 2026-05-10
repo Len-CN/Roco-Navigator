@@ -304,6 +304,44 @@ class SettingsDialog(QDialog):
         self._use_2opt.setChecked(self._settings.get("navigation.use_2opt", True))
         layout.addWidget(self._use_2opt)
 
+        # Use teleport hubs
+        self._use_teleport_hubs = QCheckBox("利用传送点中转 (缩短长距离)")
+        self._use_teleport_hubs.setToolTip(
+            "启用后将「传送点」视为可瞬移的中继节点。\n"
+            "算法仅在中转更短时才使用传送点，不会强制访问。"
+        )
+        self._use_teleport_hubs.setChecked(
+            self._settings.get("navigation.use_teleport_hubs", True))
+        layout.addWidget(self._use_teleport_hubs)
+
+        # Route endpoint
+        self._route_endpoint = NeumorphicComboBox()
+        self._route_endpoint.addItems(["开放路径 (停在最后一个点)", "回到起点 (环形)"])
+        self._route_endpoint.setToolTip(
+            "开放路径: 不回起点，停在最后一个点 (跑图采集推荐)\n"
+            "回到起点: 路线最后回到起点 (经典 TSP)"
+        )
+        endpoint_reverse = {"open": "开放路径 (停在最后一个点)", "loop": "回到起点 (环形)"}
+        ep_current = self._settings.get("navigation.route_endpoint", "open")
+        ep_display = endpoint_reverse.get(ep_current, "开放路径 (停在最后一个点)")
+        idx_ep = self._route_endpoint.findText(ep_display)
+        if idx_ep >= 0:
+            self._route_endpoint.setCurrentIndex(idx_ep)
+        layout.addLayout(self._create_row("终点策略", self._route_endpoint))
+
+        # Teleport cost
+        self._teleport_cost = QSpinBox()
+        self._teleport_cost.setRange(0, 500)
+        self._teleport_cost.setSingleStep(10)
+        self._teleport_cost.setSuffix(" px")
+        self._teleport_cost.setValue(
+            int(self._settings.get("navigation.teleport_cost_px", 150)))
+        self._teleport_cost.setToolTip(
+            "瞬移代价。设为 0 则积极使用传送点，\n"
+            "增大可避免对短距离也走传送，让路线更连贯。"
+        )
+        layout.addLayout(self._create_row("传送代价", self._teleport_cost))
+
         layout.addStretch()
         return w
 
@@ -565,6 +603,13 @@ class SettingsDialog(QDialog):
         self._settings.set("navigation.route_strategy", strategy_map.get(strategy_text, "auto"))
         self._settings.set("navigation.use_2opt", self._use_2opt.isChecked())
         self._settings.set("navigation.max_route_points", self._max_route_points.value())
+        self._settings.set("navigation.use_teleport_hubs",
+                           self._use_teleport_hubs.isChecked())
+        endpoint_map = {"开放路径 (停在最后一个点)": "open", "回到起点 (环形)": "loop"}
+        ep_text = self._route_endpoint.currentText()
+        self._settings.set("navigation.route_endpoint",
+                           endpoint_map.get(ep_text, "open"))
+        self._settings.set("navigation.teleport_cost_px", self._teleport_cost.value())
         # GPU type
         gpu_keys = ["auto", "cuda", "directml", "cpu"]
         self._settings.set("performance.gpu_type", gpu_keys[self._gpu_type.currentIndex()])
