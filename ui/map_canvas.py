@@ -11,7 +11,7 @@ import numpy as np
 from typing import Optional, List, Tuple
 
 from PyQt5.QtWidgets import QWidget, QGraphicsDropShadowEffect
-from PyQt5.QtCore import Qt, QPointF, QRectF, QTimer, pyqtSignal
+from PyQt5.QtCore import Qt, QPointF, QRectF, QTimer, pyqtSignal, QLineF
 from PyQt5.QtGui import (
     QPainter, QColor, QImage, QPixmap, QPen, QBrush,
     QFont, QPainterPath, QWheelEvent, QMouseEvent, QTransform
@@ -31,6 +31,7 @@ class MapCanvas(QWidget):
     position_clicked = pyqtSignal(float, float)  # 点击地图上的位置
     region_selected = pyqtSignal(float, float, float, float)  # x1, y1, x2, y2 in world coords
     waypoint_skip_requested = pyqtSignal(int)     # 双击路线点请求跳转
+    route_points_changed = pyqtSignal(object)     # emits [(x, y), ...] during manual editing
 
     # 缩放限制
     MIN_ZOOM = 0.1
@@ -81,6 +82,9 @@ class MapCanvas(QWidget):
         self._visited_indices: set = set()
         self._teleport_segments: set = set()  # 段索引集合，i 表示 points[i]->points[i+1] 是瞬移段
         self._hub_indices: set = set()  # 路径中实际用到的传送点节点索引
+        self._route_edit_mode: Optional[str] = None  # None / "draw" / "edit"
+        self._selected_route_index: int = -1
+        self._dragging_route_point: bool = False
 
         # 资源点
         self._resource_points: List[dict] = []
@@ -92,8 +96,12 @@ class MapCanvas(QWidget):
         self._icon_cache: dict = {}  # mark_type -> QPixmap
         self._icon_size = 24  # 显示大小
 
+        # 显示选项
+        self._show_route_line = True
+
         # 启用鼠标追踪
         self.setMouseTracking(True)
+        self.setFocusPolicy(Qt.StrongFocus)
 
         # Region selection mode (for route planning)
         self._selecting_region = False
@@ -105,6 +113,8 @@ class MapCanvas(QWidget):
 
     def start_region_selection(self):
         """Enter rectangle region selection mode."""
+        if self.is_route_editing:
+            return
         self._selecting_region = True
         self._sel_start = None
         self._sel_current = None
@@ -124,6 +134,43 @@ class MapCanvas(QWidget):
         """Clear the highlighted selected region."""
         self._selected_region = None
         self.update()
+
+    @property
+    def is_route_editing(self) -> bool:
+        return self._route_edit_mode is not None
+
+    def start_route_drawing(self, clear: bool = True):
+        """进入手工路线绘制模式。"""
+        self.cancel_region_selection()
+        if clear:
+            self.clear_route()
+        self._route_edit_mode = "draw"
+        self._selected_route_index = -1
+        self._dragging_route_point = False
+        self.setFocus(Qt.MouseFocusReason)
+        self.setCursor(Qt.CrossCursor)
+        self.update()
+
+    def start_route_editing(self):
+        """进入路线编辑模式。"""
+        self.cancel_region_selection()
+        self._route_edit_mode = "edit"
+        self._selected_route_index = -1
+        self._dragging_route_point = False
+        self.setFocus(Qt.MouseFocusReason)
+        self.setCursor(Qt.PointingHandCursor)
+        self.update()
+
+    def finish_route_editing(self):
+        """退出路线绘制/编辑模式。"""
+        self._route_edit_mode = None
+        self._selected_route_index = -1
+        self._dragging_route_point = False
+        self.setCursor(Qt.ArrowCursor)
+        self.update()
+
+    def get_route_points(self) -> List[Tuple[float, float]]:
+        return [(p.x(), p.y()) for p in self._route_points]
 
     def load_map_image(self, image_path: str) -> bool:
         """加载地图图像"""
@@ -216,6 +263,11 @@ class MapCanvas(QWidget):
         self._visited_indices = set()
         self._teleport_segments = set()
         self._hub_indices = set()
+        self._selected_route_index = -1
+        self.update()
+
+    def set_show_route_line(self, enabled: bool):
+        self._show_route_line = enabled
         self.update()
 
     def update_route_progress(self, current_index: int, visited: set = None):
@@ -307,7 +359,9 @@ class MapCanvas(QWidget):
         self._draw_resources(painter)
 
         # 绘制路线
-        self._draw_route(painter)
+        if self._show_route_line:
+            self._draw_route(painter)
+            self._draw_route_edit_overlay(painter)
 
         # Draw region selection overlay
         self._draw_selection_rect(painter)
@@ -317,7 +371,8 @@ class MapCanvas(QWidget):
             self._draw_player(painter)
 
         # 起点/终点圆环置顶 — 不被玩家箭头盖住
-        self._draw_route_endpoints(painter)
+        if self._show_route_line:
+            self._draw_route_endpoints(painter)
 
     def _draw_placeholder(self, painter: QPainter):
         painter.setPen(QColor("#a0aec0"))
@@ -456,6 +511,27 @@ class MapCanvas(QWidget):
 
         painter.restore()
 
+    def _draw_route_edit_overlay(self, painter: QPainter):
+        if not self.is_route_editing:
+            return
+
+        painter.save()
+        for i, pt in enumerate(self._route_points):
+            sp = self.world_to_screen(pt.x(), pt.y())
+            if i == self._selected_route_index:
+                painter.setBrush(QColor("#ffffff"))
+                painter.setPen(QPen(QColor("#f56565"), 3))
+                painter.drawEllipse(sp, 9, 9)
+            else:
+                painter.setBrush(QColor("#ffffff"))
+                painter.setPen(QPen(QColor("#667eea"), 2))
+                painter.drawEllipse(sp, 6, 6)
+
+            painter.setPen(QColor("#4a5568"))
+            painter.setFont(QFont("Microsoft YaHei", 8))
+            painter.drawText(sp + QPointF(8, -8), str(i + 1))
+        painter.restore()
+
     def load_resource_icons(self, icons_dir: str, mark_types: list):
         """加载资源图标"""
         import os
@@ -546,6 +622,10 @@ class MapCanvas(QWidget):
         self.update()
 
     def mousePressEvent(self, event: QMouseEvent):
+        if self.is_route_editing:
+            self._handle_route_edit_press(event)
+            return
+
         if self._selecting_region and event.button() == Qt.LeftButton:
             world = self.screen_to_world(event.pos().x(), event.pos().y())
             self._sel_start = world
@@ -563,6 +643,10 @@ class MapCanvas(QWidget):
             self.position_clicked.emit(world.x(), world.y())
 
     def mouseMoveEvent(self, event: QMouseEvent):
+        if self.is_route_editing:
+            self._handle_route_edit_move(event)
+            return
+
         if self._selecting_region and self._sel_start is not None:
             world = self.screen_to_world(event.pos().x(), event.pos().y())
             self._sel_current = world
@@ -585,6 +669,14 @@ class MapCanvas(QWidget):
                 self.setCursor(Qt.ArrowCursor)
 
     def mouseReleaseEvent(self, event: QMouseEvent):
+        if self.is_route_editing:
+            if event.button() == Qt.LeftButton:
+                self._dragging_route_point = False
+            elif event.button() in (Qt.RightButton, Qt.MiddleButton):
+                self._dragging = False
+                self.setCursor(Qt.CrossCursor if self._route_edit_mode == "draw" else Qt.ArrowCursor)
+            return
+
         if self._selecting_region and event.button() == Qt.LeftButton and self._sel_start is not None:
             world = self.screen_to_world(event.pos().x(), event.pos().y())
             x1 = min(self._sel_start.x(), world.x())
@@ -611,6 +703,8 @@ class MapCanvas(QWidget):
             self.fit_to_view()
 
     def mouseDoubleClickEvent(self, event: QMouseEvent):
+        if self.is_route_editing:
+            return
         if event.button() == Qt.LeftButton:
             self._check_waypoint_click(event.pos().x(), event.pos().y())
         else:
@@ -640,10 +734,134 @@ class MapCanvas(QWidget):
             self.waypoint_skip_requested.emit(best_i)
 
     def keyPressEvent(self, event):
-        if self._selecting_region and event.key() == Qt.Key_Escape:
+        if self.is_route_editing and event.key() in (Qt.Key_Delete, Qt.Key_Backspace):
+            self._delete_selected_route_point()
+        elif self._selecting_region and event.key() == Qt.Key_Escape:
             self.cancel_region_selection()
         else:
             super().keyPressEvent(event)
+
+    def _emit_route_points_changed(self):
+        self.route_points_changed.emit(self.get_route_points())
+
+    def _handle_route_edit_press(self, event: QMouseEvent):
+        if event.button() in (Qt.RightButton, Qt.MiddleButton):
+            self._dragging = True
+            self._drag_start = QPointF(event.pos())
+            self._last_offset = QPointF(self._offset_x, self._offset_y)
+            self.setCursor(Qt.ClosedHandCursor)
+            return
+
+        if event.button() != Qt.LeftButton:
+            return
+
+        sx, sy = event.pos().x(), event.pos().y()
+        world = self.screen_to_world(sx, sy)
+        near_idx = self._nearest_waypoint_index(sx, sy)
+
+        if near_idx >= 0:
+            self._selected_route_index = near_idx
+            self._dragging_route_point = True
+            self.setCursor(Qt.ClosedHandCursor)
+            self.update()
+            return
+
+        if self._route_edit_mode == "edit":
+            seg_idx = self._nearest_segment_index(sx, sy)
+            if seg_idx >= 0:
+                self._route_points.insert(seg_idx + 1, world)
+                self._selected_route_index = seg_idx + 1
+                self._dragging_route_point = True
+                self._clear_route_plan_metadata()
+                self._emit_route_points_changed()
+                self.update()
+                return
+
+        self._route_points.append(world)
+        self._selected_route_index = len(self._route_points) - 1
+        self._clear_route_plan_metadata()
+        self._emit_route_points_changed()
+        self.update()
+
+    def _handle_route_edit_move(self, event: QMouseEvent):
+        sx, sy = event.pos().x(), event.pos().y()
+        if self._dragging:
+            delta = QPointF(event.pos()) - self._drag_start
+            self._offset_x = self._last_offset.x() + delta.x()
+            self._offset_y = self._last_offset.y() + delta.y()
+            self.update()
+            return
+
+        if self._dragging_route_point and 0 <= self._selected_route_index < len(self._route_points):
+            self._route_points[self._selected_route_index] = self.screen_to_world(sx, sy)
+            self._clear_route_plan_metadata()
+            self._emit_route_points_changed()
+            self.update()
+            return
+
+        if self._nearest_waypoint_index(sx, sy) >= 0:
+            self.setCursor(Qt.PointingHandCursor)
+        elif self._route_edit_mode == "edit" and self._nearest_segment_index(sx, sy) >= 0:
+            self.setCursor(Qt.CrossCursor)
+        else:
+            self.setCursor(Qt.CrossCursor if self._route_edit_mode == "draw" else Qt.ArrowCursor)
+
+    def _delete_selected_route_point(self):
+        if not (0 <= self._selected_route_index < len(self._route_points)):
+            return
+        self._route_points.pop(self._selected_route_index)
+        if self._selected_route_index >= len(self._route_points):
+            self._selected_route_index = len(self._route_points) - 1
+        self._clear_route_plan_metadata()
+        self._emit_route_points_changed()
+        self.update()
+
+    def _clear_route_plan_metadata(self):
+        self._current_target_index = -1
+        self._visited_indices = set()
+        self._teleport_segments = set()
+        self._hub_indices = set()
+
+    def _nearest_waypoint_index(self, sx: float, sy: float, radius: int = 12) -> int:
+        r2 = radius * radius
+        best_i, best_d = -1, r2
+        for i, pt in enumerate(self._route_points):
+            sp = self.world_to_screen(pt.x(), pt.y())
+            dx, dy = sx - sp.x(), sy - sp.y()
+            d = dx * dx + dy * dy
+            if d <= best_d:
+                best_i, best_d = i, d
+        return best_i
+
+    def _nearest_segment_index(self, sx: float, sy: float, radius: int = 10) -> int:
+        if len(self._route_points) < 2:
+            return -1
+        click = QPointF(sx, sy)
+        best_i, best_d = -1, float(radius)
+        for i in range(len(self._route_points) - 1):
+            p1 = self.world_to_screen(self._route_points[i].x(), self._route_points[i].y())
+            p2 = self.world_to_screen(self._route_points[i + 1].x(), self._route_points[i + 1].y())
+            d = self._distance_to_segment(click, p1, p2)
+            if d <= best_d:
+                best_i, best_d = i, d
+        return best_i
+
+    @staticmethod
+    def _distance_to_segment(p: QPointF, a: QPointF, b: QPointF) -> float:
+        line = QLineF(a, b)
+        length = line.length()
+        if length <= 0:
+            dx, dy = p.x() - a.x(), p.y() - a.y()
+            return (dx * dx + dy * dy) ** 0.5
+
+        ax, ay = a.x(), a.y()
+        bx, by = b.x(), b.y()
+        t = ((p.x() - ax) * (bx - ax) + (p.y() - ay) * (by - ay)) / (length * length)
+        t = max(0.0, min(1.0, t))
+        px = ax + t * (bx - ax)
+        py = ay + t * (by - ay)
+        dx, dy = p.x() - px, p.y() - py
+        return (dx * dx + dy * dy) ** 0.5
 
     def _draw_selection_rect(self, painter: QPainter):
         """Draw the region selection rectangle (rubber band or confirmed)."""

@@ -7,11 +7,12 @@
 """
 
 import logging
+import os
 import sys
 from typing import Optional
 from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QLabel, QMessageBox,
+    QLabel, QMessageBox, QFileDialog, QInputDialog,
     QApplication, QSizePolicy, QFrame
 )
 from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal, QRectF, QProcess
@@ -73,6 +74,7 @@ class RouteWorker(QThread):
     finished payload: (RoutePlan, distance, names)
     """
     finished = pyqtSignal(object, float, list)
+    failed = pyqtSignal(str)
 
     def __init__(self, planner, start_pos, resources, strategy,
                  teleport_hubs=None, end=None, teleport_cost=0.0):
@@ -91,15 +93,19 @@ class RouteWorker(QThread):
         return self._teleport_hubs
 
     def run(self):
-        targets = [(r["x"], r["y"]) for r in self._resources]
-        names = [r.get("name", "") for r in self._resources]
-        plan = self._planner.plan_route(
-            self._start, targets, self._strategy,
-            teleport_hubs=self._teleport_hubs,
-            teleport_cost=self._teleport_cost,
-            end=self._end,
-        )
-        self.finished.emit(plan, plan.total_cost, names)
+        try:
+            targets = [(r["x"], r["y"]) for r in self._resources]
+            names = [r.get("name", "") for r in self._resources]
+            plan = self._planner.plan_route(
+                self._start, targets, self._strategy,
+                teleport_hubs=self._teleport_hubs,
+                teleport_cost=self._teleport_cost,
+                end=self._end,
+            )
+            self.finished.emit(plan, plan.total_cost, names)
+        except Exception as e:
+            logger.exception("Route planning failed")
+            self.failed.emit(str(e))
 
 
 # ==================== 状态栏 ====================
@@ -243,6 +249,10 @@ class MainWindow(QMainWindow):
         # 加载数据
         self._resource_manager.load()
         self._route_manager.load()
+        self._current_route_id: str = ""
+        self._route_dirty: bool = False
+        self._route_editing: bool = False
+        self._route_snapshot = []
 
         # ---- 构建 UI ----
         self._setup_ui()
@@ -258,9 +268,9 @@ class MainWindow(QMainWindow):
         )
         if settings.get("ui.overlay_enabled", True):
             self._overlay_hud.show()
-        self._overlay_hud.closed.connect(
-            lambda: self._sidebar._overlay_check.setChecked(False)
-        )
+        self._sidebar.set_overlay_enabled(settings.get("ui.overlay_enabled", True))
+        self._apply_display_options()
+        self._overlay_hud.closed.connect(self._on_overlay_closed)
         self._overlay_hud.crop_size_changed.connect(self._on_hud_crop_size_changed)
         self._overlay_hud.size_changed.connect(self._on_hud_size_changed)
         self._overlay_hud.shape_changed.connect(self._on_hud_shape_changed)
@@ -278,6 +288,8 @@ class MainWindow(QMainWindow):
         # GPU 状态
         self._update_gpu_status()
         self._update_data_info()
+        self._refresh_route_library()
+        self._update_route_info()
         self._center_on_screen()
 
         # ---- 依赖安装进程 (managed at MainWindow level for persistence) ----
@@ -322,6 +334,7 @@ class MainWindow(QMainWindow):
         self._map_canvas.position_clicked.connect(self._on_map_clicked)
         self._map_canvas.region_selected.connect(self._on_region_selected)
         self._map_canvas.waypoint_skip_requested.connect(self._on_waypoint_skip_requested)
+        self._map_canvas.route_points_changed.connect(self._on_route_points_changed)
         content_layout.addWidget(self._map_canvas, stretch=1)
 
         main_layout.addWidget(content, stretch=1)
@@ -343,6 +356,18 @@ class MainWindow(QMainWindow):
         self._sidebar.filter_type_changed.connect(self._on_filter_type_changed)
         self._sidebar.plan_route_for_type.connect(self._on_plan_route_for_type)
         self._sidebar.select_region_for_route.connect(self._on_select_region_for_route)
+        self._sidebar.route_selected_changed.connect(self._on_route_selected_changed)
+        self._sidebar.route_draw_clicked.connect(self._on_route_draw)
+        self._sidebar.route_finish_clicked.connect(self._on_route_finish)
+        self._sidebar.route_cancel_clicked.connect(self._on_route_cancel)
+        self._sidebar.route_save_clicked.connect(self._on_route_save)
+        self._sidebar.route_load_clicked.connect(self._on_route_load)
+        self._sidebar.route_rename_clicked.connect(self._on_route_rename)
+        self._sidebar.route_duplicate_clicked.connect(self._on_route_duplicate)
+        self._sidebar.route_delete_clicked.connect(self._on_route_delete)
+        self._sidebar.route_import_clicked.connect(self._on_route_import)
+        self._sidebar.route_export_current_clicked.connect(self._on_route_export_current)
+        self._sidebar.route_export_all_clicked.connect(self._on_route_export_all)
 
     # ==================== Tracking ====================
 
@@ -523,6 +548,7 @@ class MainWindow(QMainWindow):
             teleport_hubs=hubs, end=end, teleport_cost=teleport_cost
         )
         self._route_worker.finished.connect(self._on_route_planned)
+        self._route_worker.failed.connect(self._on_route_plan_failed)
         self._route_worker.start()
 
     def _on_route_planned(self, plan, dist, names):
@@ -540,14 +566,10 @@ class MainWindow(QMainWindow):
 
         selected = self._sidebar._get_selected_mark_type_names()
         type_name = ", ".join(sorted(selected)) if selected else "全部"
-        route_obj = Route(
-            id=f"auto_{len(self._route_manager.get_all()) + 1}",
-            name=f"{type_name} ({len(points) - 1} 个点)",
-            targets=points[1:],
-            total_distance=dist,
-            strategy=plan.used_strategy,
-        )
-        self._route_manager.add(route_obj)
+        self._current_route_id = ""
+        self._route_dirty = True
+        self._route_editing = False
+        self._route_snapshot = []
         # 优先用 worker 持有的 hubs（与 plan_route 同一份引用，避免浮点失配）
         worker = getattr(self, "_route_worker", None)
         hubs = list(worker.teleport_hubs) if worker is not None else self._get_hubs()
@@ -556,12 +578,22 @@ class MainWindow(QMainWindow):
         self._map_canvas.set_route([(p[0], p[1]) for p in points],
                                    teleport_segments=teleport_segments,
                                    hub_indices=hub_indices)
+        self._map_canvas.finish_route_editing()
         self._map_canvas.clear_selected_region()
+        self._sidebar.set_current_route_id("")
+        self._refresh_route_library()
+        self._update_route_info()
         tp_hint = f", {len(teleport_segments)} 段瞬移" if teleport_segments else ""
         self._sidebar.set_nav_progress(
-            0, f"路线: {len(points)-1} 个目标, {dist:.0f}px{tp_hint}")
+            0, f"草稿路线: {type_name}, {len(points)-1} 个目标, {dist:.0f}px{tp_hint}")
         logger.info("Route planned: %d targets, %d teleport segs, %d hubs, %.0f cost",
                     len(points) - 1, len(teleport_segments), len(hub_indices), dist)
+
+    def _on_route_plan_failed(self, message: str):
+        self._sidebar.set_nav_progress(0, f"规划失败: {message[:80]}")
+        self._map_canvas.clear_route()
+        self._map_canvas.clear_selected_region()
+        logger.error("Route planning failed: %s", message)
 
     def _on_start_nav(self):
         """开始导航"""
@@ -571,7 +603,8 @@ class MainWindow(QMainWindow):
             return
 
         route = [(p.x(), p.y()) for p in self._map_canvas._route_points]
-        self._navigator.start(route)
+        target_names = self._build_nav_target_names(route)
+        self._navigator.start(route, target_names=target_names)
 
         self._title_bar.set_status("active")
         self._title_bar.set_status_text("导航中")
@@ -610,6 +643,286 @@ class MainWindow(QMainWindow):
         self._title_bar.set_status("active")
         self._title_bar.set_status_text("已完成")
 
+    # ==================== Route Library ====================
+
+    def _refresh_route_library(self):
+        self._sidebar.set_routes(self._route_manager.get_all(), self._current_route_id)
+
+    def _current_route_points(self):
+        return self._map_canvas.get_route_points()
+
+    def _current_route_distance(self):
+        points = self._current_route_points()
+        return total_distance(points) if len(points) >= 2 else 0.0
+
+    def _update_route_info(self):
+        self._sidebar.set_route_info(
+            len(self._current_route_points()),
+            self._current_route_distance(),
+            dirty=self._route_dirty,
+            editing=self._route_editing,
+        )
+        self._sidebar.set_route_editing_active(self._route_editing)
+
+    def _on_route_points_changed(self, _points):
+        self._route_dirty = True
+        self._navigator.stop()
+        self._update_route_info()
+
+    def _on_route_selected_changed(self, route_id):
+        logger.debug("Route selected in library: %s", route_id)
+
+    def _confirm_discard_dirty(self) -> bool:
+        if not self._route_dirty:
+            return True
+        reply = QMessageBox.question(
+            self, "未保存路线",
+            "当前路线还没有保存，是否放弃这些修改？",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        return reply == QMessageBox.Yes
+
+    def _load_route_to_canvas(self, route: Route):
+        self._current_route_id = route.id
+        self._route_dirty = False
+        self._route_editing = False
+        self._route_snapshot = []
+        self._navigator.stop()
+        self._map_canvas.finish_route_editing()
+        self._map_canvas.set_route(route.points)
+        self._sidebar.set_current_route_id(route.id)
+        self._sidebar.set_nav_progress(0, f"已加载路线: {route.name}")
+        self._update_route_info()
+
+    def _on_route_draw(self):
+        if not self._confirm_discard_dirty():
+            return
+        self._route_dirty = False
+        self._route_editing = True
+        self._navigator.stop()
+        current_points = self._current_route_points()
+        if current_points:
+            self._route_snapshot = list(current_points)
+            self._map_canvas.start_route_editing()
+            self._sidebar.set_nav_progress(0, "路线编辑: 拖动点，点击线段插入，Delete 删除")
+        else:
+            self._current_route_id = ""
+            self._route_snapshot = []
+            self._sidebar.set_current_route_id("")
+            self._map_canvas.start_route_drawing(clear=True)
+            self._sidebar.set_nav_progress(0, "手工绘制: 左键逐点添加路线")
+        self._update_route_info()
+
+    def _on_route_finish(self):
+        self._route_editing = False
+        self._map_canvas.finish_route_editing()
+        self._sidebar.set_nav_progress(0, "路线编辑已完成，可保存或开始导航")
+        self._update_route_info()
+
+    def _on_route_cancel(self):
+        self._route_editing = False
+        self._map_canvas.finish_route_editing()
+        if self._route_snapshot:
+            self._map_canvas.set_route(self._route_snapshot)
+            self._route_snapshot = []
+            self._route_dirty = False
+        elif not self._current_route_id:
+            self._map_canvas.clear_route()
+            self._route_dirty = False
+        self._sidebar.set_nav_progress(0, "已取消路线编辑")
+        self._update_route_info()
+
+    def _on_route_save(self):
+        points = self._current_route_points()
+        if len(points) < 2:
+            QMessageBox.information(self, "提示", "路线至少需要 2 个点。")
+            return
+
+        route = self._route_manager.get_by_id(self._current_route_id) if self._current_route_id else None
+        if route is None:
+            name, ok = QInputDialog.getText(self, "保存路线", "路线名称:")
+            if not ok:
+                return
+            name = name.strip() or "未命名路线"
+            route = Route(
+                id="",
+                name=name,
+                points=points,
+                total_distance=total_distance(points),
+                strategy="custom",
+                map_id="default",
+            )
+            self._route_manager.add(route)
+            self._current_route_id = route.id
+        else:
+            route.points = points
+            route.total_distance = total_distance(points)
+            if route.strategy.startswith("auto"):
+                route.strategy = "custom"
+            self._route_manager.update(route)
+
+        if not self._route_manager.save():
+            QMessageBox.warning(self, "保存失败", "路线文件保存失败，请检查文件权限。")
+            return
+
+        self._route_dirty = False
+        self._route_editing = False
+        self._route_snapshot = []
+        self._map_canvas.finish_route_editing()
+        self._refresh_route_library()
+        self._sidebar.set_current_route_id(self._current_route_id)
+        self._sidebar.set_nav_progress(0, f"已保存路线: {route.name}")
+        self._update_route_info()
+
+    def _on_route_load(self):
+        route_id = self._sidebar.selected_route_id()
+        if not route_id:
+            QMessageBox.information(self, "提示", "请先在路线库中选择路线。")
+            return
+        if not self._confirm_discard_dirty():
+            return
+        route = self._route_manager.get_by_id(route_id)
+        if route is None:
+            QMessageBox.warning(self, "加载失败", "找不到选中的路线。")
+            self._refresh_route_library()
+            return
+        self._load_route_to_canvas(route)
+
+    def _on_route_rename(self):
+        route_id = self._sidebar.selected_route_id() or self._current_route_id
+        route = self._route_manager.get_by_id(route_id)
+        if route is None:
+            QMessageBox.information(self, "提示", "请先选择已保存的路线。")
+            return
+        name, ok = QInputDialog.getText(self, "重命名路线", "路线名称:", text=route.name)
+        if not ok:
+            return
+        route.name = name.strip() or route.name
+        self._route_manager.update(route)
+        self._route_manager.save()
+        self._refresh_route_library()
+        self._sidebar.set_current_route_id(route.id)
+
+    def _on_route_duplicate(self):
+        route_id = self._sidebar.selected_route_id() or self._current_route_id
+        route = self._route_manager.duplicate(route_id)
+        if route is None:
+            QMessageBox.information(self, "提示", "请先选择已保存的路线。")
+            return
+        self._route_manager.save()
+        self._refresh_route_library()
+        self._load_route_to_canvas(route)
+
+    def _on_route_delete(self):
+        route_id = self._sidebar.selected_route_id() or self._current_route_id
+        route = self._route_manager.get_by_id(route_id)
+        if route is None:
+            QMessageBox.information(self, "提示", "请先选择已保存的路线。")
+            return
+        reply = QMessageBox.question(
+            self, "删除路线",
+            f"确定删除路线“{route.name}”吗？",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+        self._route_manager.delete(route.id)
+        self._route_manager.save()
+        if self._current_route_id == route.id:
+            self._current_route_id = ""
+            self._route_dirty = False
+            self._route_editing = False
+            self._map_canvas.finish_route_editing()
+            self._map_canvas.clear_route()
+        self._refresh_route_library()
+        self._update_route_info()
+
+    def _on_route_import(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "导入路线", "", "路线 JSON (*.json);;所有文件 (*.*)"
+        )
+        if not path:
+            return
+        imported = self._route_manager.import_routes(path)
+        if not imported:
+            QMessageBox.warning(self, "导入失败", "没有导入任何路线。")
+            return
+        self._route_manager.save()
+        self._refresh_route_library()
+        self._load_route_to_canvas(imported[0])
+        QMessageBox.information(self, "导入完成", f"已导入 {len(imported)} 条路线。")
+
+    def _on_route_export_current(self):
+        points = self._current_route_points()
+        route = None
+        saved_route = self._route_manager.get_by_id(self._current_route_id)
+        if len(points) >= 2:
+            route = Route(
+                id=self._current_route_id or "draft",
+                name=saved_route.name if saved_route else "未保存路线",
+                points=points,
+                total_distance=total_distance(points),
+                strategy=saved_route.strategy if saved_route else "custom",
+                map_id=saved_route.map_id if saved_route else "default",
+                created=saved_route.created if saved_route else "",
+                updated=saved_route.updated if saved_route else "",
+                description=saved_route.description if saved_route else "",
+            )
+        if route is None:
+            QMessageBox.information(self, "提示", "暂无可导出的当前路线。")
+            return
+
+        default_name = self._safe_export_filename(route.name)
+        path, _ = QFileDialog.getSaveFileName(
+            self, "导出当前路线", default_name, "路线 JSON (*.json)"
+        )
+        if not path:
+            return
+        if not path.lower().endswith(".json"):
+            path += ".json"
+        if self._route_manager.export_route(route, path):
+            QMessageBox.information(self, "导出完成", "当前路线已导出。")
+        else:
+            QMessageBox.warning(self, "导出失败", "路线导出失败。")
+
+    def _on_route_export_all(self):
+        if self._route_manager.count <= 0:
+            QMessageBox.information(self, "提示", "路线库中暂无路线。")
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "导出全部路线", "roco_routes.json", "路线 JSON (*.json)"
+        )
+        if not path:
+            return
+        if not path.lower().endswith(".json"):
+            path += ".json"
+        if self._route_manager.export_all(path):
+            QMessageBox.information(self, "导出完成", "全部路线已导出。")
+        else:
+            QMessageBox.warning(self, "导出失败", "路线导出失败。")
+
+    @staticmethod
+    def _safe_export_filename(name: str) -> str:
+        safe = "".join("_" if ch in '<>:"/\\|?*' else ch for ch in (name or "route"))
+        return f"{safe.strip() or 'route'}.json"
+
+    def _build_nav_target_names(self, route):
+        display_list = self._resource_manager.to_display_list()
+        res_lookup = {
+            (round(res["x"]), round(res["y"])): res.get("name", "")
+            for res in display_list
+        }
+        names = []
+        for i, pt in enumerate(route):
+            if i == 0:
+                names.append("起点")
+                continue
+            name = res_lookup.get((round(pt[0]), round(pt[1])))
+            names.append(name or f"点位 {i}")
+        return names
+
     def _update_hud_from_nav(self, tracking_status, nav_info):
         """更新 HUD 显示"""
         if not self._overlay_hud.isVisible():
@@ -627,17 +940,18 @@ class MainWindow(QMainWindow):
 
         # 转换路线点为裁剪图相对坐标
         route_rel = []
-        half = hud_crop_size / 2
+        rel_x, rel_y = rel
+        crop_h, crop_w = crop.shape[:2]
         for pt in self._navigator.route:
-            rx = pt[0] - pos[0] + half
-            ry = pt[1] - pos[1] + half
+            rx = pt[0] - pos[0] + rel_x
+            ry = pt[1] - pos[1] + rel_y
             route_rel.append((rx, ry))
 
         target_rel = None
         if nav_info.current_target:
             target_rel = (
-                nav_info.current_target[0] - pos[0] + half,
-                nav_info.current_target[1] - pos[1] + half,
+                nav_info.current_target[0] - pos[0] + rel_x,
+                nav_info.current_target[1] - pos[1] + rel_y,
             )
 
         # 只传递规划路线中的点位 (不传全部资源点)
@@ -653,9 +967,9 @@ class MainWindow(QMainWindow):
             for pt in self._navigator.route:
                 key = (round(pt[0]), round(pt[1]))
                 res = res_lookup.get(key)
-                rx = pt[0] - (pos[0] - half)
-                ry = pt[1] - (pos[1] - half)
-                if -10 <= rx <= hud_crop_size + 10 and -10 <= ry <= hud_crop_size + 10:
+                rx = pt[0] - pos[0] + rel_x
+                ry = pt[1] - pos[1] + rel_y
+                if -10 <= rx <= crop_w + 10 and -10 <= ry <= crop_h + 10:
                     resource_rel.append({
                         "rx": rx, "ry": ry,
                         "type": res.get("type", "") if res else "",
@@ -854,6 +1168,10 @@ class MainWindow(QMainWindow):
             self._overlay_hud.hide()
         self._settings.set("ui.overlay_enabled", enabled)
 
+    def _on_overlay_closed(self):
+        self._sidebar.set_overlay_enabled(False)
+        self._settings.set("ui.overlay_enabled", False)
+
     def _on_toggle_overlay_passthrough(self, enabled: bool):
         self._overlay_hud.set_passthrough_locked(enabled)
 
@@ -865,6 +1183,17 @@ class MainWindow(QMainWindow):
 
     def _on_hud_shape_changed(self, shape: str):
         self._settings.set("ui.hud_shape", shape)
+
+    def _apply_display_options(self):
+        show_route = self._settings.get("ui.show_route_line", True)
+        show_distance = self._settings.get("ui.show_distance", True)
+        show_compass = self._settings.get("ui.show_compass", True)
+        self._map_canvas.set_show_route_line(show_route)
+        self._overlay_hud.set_display_options(
+            show_route_line=show_route,
+            show_distance=show_distance,
+            show_compass=show_compass,
+        )
 
     # ==================== Map click ====================
 
@@ -892,8 +1221,15 @@ class MainWindow(QMainWindow):
         ]
 
         if not region_resources:
-            from PyQt5.QtWidgets import QMessageBox
             QMessageBox.information(self, "提示", "选中区域内没有资源点。")
+            self._map_canvas.clear_selected_region()
+            return
+
+        max_points = self._settings.get("navigation.max_route_points", 500)
+        if len(region_resources) > max_points:
+            QMessageBox.information(self, "提示",
+                                    f"选中区域有 {len(region_resources)} 个点位，超过上限 {max_points}。\n"
+                                    "请缩小框选范围，或在设置→性能中调整上限。")
             self._map_canvas.clear_selected_region()
             return
 
@@ -914,6 +1250,7 @@ class MainWindow(QMainWindow):
             teleport_hubs=hubs, end=end, teleport_cost=teleport_cost
         )
         self._route_worker.finished.connect(self._on_route_planned)
+        self._route_worker.failed.connect(self._on_route_plan_failed)
         self._route_worker.start()
 
     # ==================== Settings ====================
@@ -1036,6 +1373,7 @@ class MainWindow(QMainWindow):
         # Update HUD opacity
         opacity = self._settings.get("ui.overlay_opacity", 0.85)
         self._overlay_hud.set_opacity(opacity)
+        self._apply_display_options()
         
         # Update navigator
         self._navigator._arrival_distance = self._settings.get("navigation.arrival_distance", 20)
@@ -1089,11 +1427,32 @@ class MainWindow(QMainWindow):
         if self._tracker.is_running:
             self._tracker.stop()
         self._navigator.stop()
+        self._stop_background_tasks()
         self._overlay_hud.close()
         self._screen_capture.release()
         self._settings.save()
         logger.info("Main window closed, resources released")
         super().closeEvent(event)
+
+    def _stop_background_tasks(self):
+        for attr in ("_wiki_worker", "_route_worker"):
+            worker = getattr(self, attr, None)
+            if worker is not None and worker.isRunning():
+                logger.info("Waiting for %s to stop", attr)
+                worker.requestInterruption()
+                if not worker.wait(3000):
+                    logger.warning("%s did not stop in time; terminating", attr)
+                    worker.terminate()
+                    worker.wait(1000)
+
+        process = getattr(self, "_dep_install_process", None)
+        if process is not None and process.state() != QProcess.NotRunning:
+            logger.info("Stopping dependency install process")
+            process.terminate()
+            if not process.waitForFinished(3000):
+                process.kill()
+                process.waitForFinished(1000)
+            self._dep_install_running = False
 
     # ==================== Properties ====================
 

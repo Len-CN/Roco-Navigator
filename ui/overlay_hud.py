@@ -115,6 +115,11 @@ class OverlayHUD(QWidget):
         # 地图缩放
         self._crop_size: int = 350
 
+        # 显示选项
+        self._show_route_line = True
+        self._show_distance = True
+        self._show_compass = True
+
         # 交互状态
         self._dragging = False
         self._drag_start = QPoint()
@@ -200,6 +205,14 @@ class OverlayHUD(QWidget):
 
     def set_opacity(self, opacity: float):
         self._opacity = max(0.3, min(1.0, opacity))
+        self.update()
+
+    def set_display_options(self, show_route_line: bool = True,
+                            show_distance: bool = True,
+                            show_compass: bool = True):
+        self._show_route_line = show_route_line
+        self._show_distance = show_distance
+        self._show_compass = show_compass
         self.update()
 
     def set_locked(self, locked: bool):
@@ -305,7 +318,7 @@ class OverlayHUD(QWidget):
             self._draw_map_image(painter)
 
         # 路线
-        if self._route_rel_points:
+        if self._show_route_line and self._route_rel_points:
             self._draw_route(painter)
 
         # 目标标记
@@ -317,7 +330,8 @@ class OverlayHUD(QWidget):
             self._draw_player(painter)
 
         # 指北针
-        self._draw_compass(painter)
+        if self._show_compass:
+            self._draw_compass(painter)
 
         painter.restore()
 
@@ -537,8 +551,9 @@ class OverlayHUD(QWidget):
         eta_text = f"预计: {self._eta_seconds:.0f}秒" if self._eta_seconds < 9999 else "预计: --"
         progress_text = f"{self._current_index}/{self._total_targets}"
 
-        painter.drawText(x0, y0 + 42, dist_text)
-        painter.drawText(x0 + 100, y0 + 42, eta_text)
+        if self._show_distance:
+            painter.drawText(x0, y0 + 42, dist_text)
+            painter.drawText(x0 + 100, y0 + 42, eta_text)
         painter.drawText(self._info_rect.right() - 45, y0 + 42, progress_text)
 
         # 进度条

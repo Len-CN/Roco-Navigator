@@ -69,6 +69,18 @@ class Sidebar(QWidget):
     filter_type_changed = pyqtSignal(object)   # emits a set of selected mark_type_names
     plan_route_for_type = pyqtSignal(object)   # emits a set of selected mark_type_names
     select_region_for_route = pyqtSignal()   # request map canvas to enter selection mode
+    route_selected_changed = pyqtSignal(object)
+    route_draw_clicked = pyqtSignal()
+    route_finish_clicked = pyqtSignal()
+    route_cancel_clicked = pyqtSignal()
+    route_save_clicked = pyqtSignal()
+    route_load_clicked = pyqtSignal()
+    route_rename_clicked = pyqtSignal()
+    route_duplicate_clicked = pyqtSignal()
+    route_delete_clicked = pyqtSignal()
+    route_import_clicked = pyqtSignal()
+    route_export_current_clicked = pyqtSignal()
+    route_export_all_clicked = pyqtSignal()
     toggle_overlay_clicked = pyqtSignal(bool)
     overlay_passthrough_clicked = pyqtSignal(bool)
     settings_clicked = pyqtSignal()
@@ -172,6 +184,73 @@ class Sidebar(QWidget):
         nav_section.add_widget(self._nav_info_label)
 
         content_layout.addWidget(nav_section)
+        content_layout.addWidget(NeumorphicSeparator())
+
+        # ---- 路线库 ----
+        route_section = SidebarSection("路线库")
+
+        self._route_combo = NeumorphicComboBox()
+        self._route_combo.currentIndexChanged.connect(self._on_route_selected)
+        route_section.add_widget(self._route_combo)
+
+        edit_row = QHBoxLayout()
+        edit_row.setSpacing(8)
+        self._route_draw_btn = NeumorphicButton("绘制", primary=True)
+        self._route_finish_btn = NeumorphicButton("完成")
+        self._route_draw_btn.clicked.connect(self.route_draw_clicked.emit)
+        self._route_finish_btn.clicked.connect(self.route_finish_clicked.emit)
+        edit_row.addWidget(self._route_draw_btn)
+        edit_row.addWidget(self._route_finish_btn)
+        route_section.add_layout(edit_row)
+
+        save_row = QHBoxLayout()
+        save_row.setSpacing(8)
+        self._route_cancel_btn = NeumorphicButton("取消")
+        self._route_save_btn = NeumorphicButton("保存", primary=True)
+        self._route_cancel_btn.clicked.connect(self.route_cancel_clicked.emit)
+        self._route_save_btn.clicked.connect(self.route_save_clicked.emit)
+        save_row.addWidget(self._route_cancel_btn)
+        save_row.addWidget(self._route_save_btn)
+        route_section.add_layout(save_row)
+
+        manage_row = QHBoxLayout()
+        manage_row.setSpacing(8)
+        self._route_load_btn = NeumorphicButton("加载")
+        self._route_rename_btn = NeumorphicButton("重命名")
+        self._route_load_btn.clicked.connect(self.route_load_clicked.emit)
+        self._route_rename_btn.clicked.connect(self.route_rename_clicked.emit)
+        manage_row.addWidget(self._route_load_btn)
+        manage_row.addWidget(self._route_rename_btn)
+        route_section.add_layout(manage_row)
+
+        manage_row2 = QHBoxLayout()
+        manage_row2.setSpacing(8)
+        self._route_duplicate_btn = NeumorphicButton("复制")
+        self._route_delete_btn = NeumorphicButton("删除")
+        self._route_duplicate_btn.clicked.connect(self.route_duplicate_clicked.emit)
+        self._route_delete_btn.clicked.connect(self.route_delete_clicked.emit)
+        manage_row2.addWidget(self._route_duplicate_btn)
+        manage_row2.addWidget(self._route_delete_btn)
+        route_section.add_layout(manage_row2)
+
+        io_row = QHBoxLayout()
+        io_row.setSpacing(8)
+        self._route_import_btn = NeumorphicButton("导入")
+        self._route_export_current_btn = NeumorphicButton("导出当前")
+        self._route_import_btn.clicked.connect(self.route_import_clicked.emit)
+        self._route_export_current_btn.clicked.connect(self.route_export_current_clicked.emit)
+        io_row.addWidget(self._route_import_btn)
+        io_row.addWidget(self._route_export_current_btn)
+        route_section.add_layout(io_row)
+
+        self._route_export_all_btn = NeumorphicButton("导出全部")
+        self._route_export_all_btn.clicked.connect(self.route_export_all_clicked.emit)
+        route_section.add_widget(self._route_export_all_btn)
+
+        self._route_info_label = NeumorphicLabel("暂无路线", level="caption")
+        route_section.add_widget(self._route_info_label)
+
+        content_layout.addWidget(route_section)
         content_layout.addWidget(NeumorphicSeparator())
 
         # ---- 显示控制 ----
@@ -319,6 +398,46 @@ class Sidebar(QWidget):
     def set_data_info(self, text: str):
         self._data_info_label.setText(text)
 
+    def set_overlay_enabled(self, enabled: bool):
+        self._overlay_check.blockSignals(True)
+        self._overlay_check.setChecked(enabled)
+        self._overlay_check.blockSignals(False)
+
+    def set_routes(self, routes: list, current_id: str = ""):
+        self._route_combo.blockSignals(True)
+        self._route_combo.clear()
+        self._route_combo.addItem("未选择路线", "")
+        for route in routes:
+            count = len(getattr(route, "points", []) or [])
+            self._route_combo.addItem(f"{route.name} ({count}点)", route.id)
+        index = self._route_combo.findData(current_id or "")
+        self._route_combo.setCurrentIndex(index if index >= 0 else 0)
+        self._route_combo.blockSignals(False)
+
+    def selected_route_id(self) -> str:
+        return self._route_combo.currentData() or ""
+
+    def set_current_route_id(self, route_id: str):
+        self._route_combo.blockSignals(True)
+        index = self._route_combo.findData(route_id or "")
+        self._route_combo.setCurrentIndex(index if index >= 0 else 0)
+        self._route_combo.blockSignals(False)
+
+    def set_route_info(self, point_count: int, distance: float = 0.0,
+                       dirty: bool = False, editing: bool = False):
+        if point_count <= 0:
+            text = "暂无路线"
+        else:
+            dirty_text = "，未保存" if dirty else ""
+            editing_text = "，编辑中" if editing else ""
+            text = f"{point_count} 点，{distance:.0f}px{dirty_text}{editing_text}"
+        self._route_info_label.setText(text)
+
+    def set_route_editing_active(self, active: bool):
+        self._route_draw_btn.setEnabled(not active)
+        self._route_finish_btn.setEnabled(active)
+        self._route_cancel_btn.setEnabled(active)
+
     # ---- Slots ----
     def _on_start_tracking(self):
         self.set_tracking_active(True)
@@ -385,3 +504,6 @@ class Sidebar(QWidget):
         else:
             selected = self._get_selected_mark_type_names()
             self.plan_route_for_type.emit(selected)
+
+    def _on_route_selected(self, _index: int):
+        self.route_selected_changed.emit(self.selected_route_id())
