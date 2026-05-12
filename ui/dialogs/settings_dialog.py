@@ -21,7 +21,8 @@ from ..widgets.neumorphic import (
     NeumorphicSlider, NeumorphicSeparator, NeumorphicProgress,
     NeumorphicComboBox,
     BG_PRIMARY, BG_SECONDARY, BG_CARD, TEXT_PRIMARY, TEXT_SECONDARY, ACCENT,
-    TEXT_DISABLED, SUCCESS, WARNING, ERROR, SHADOW_DARK
+    TEXT_DISABLED, SUCCESS, WARNING, ERROR, SHADOW_DARK,
+    checkbox_qss, spinbox_qss, tab_qss, base_scrollbar_qss, font_qss
 )
 
 logger = logging.getLogger(__name__)
@@ -42,48 +43,9 @@ class SettingsDialog(QDialog):
             QDialog {{
                 background-color: {BG_PRIMARY};
             }}
-            QTabWidget::pane {{
-                background-color: {BG_SECONDARY};
-                border: none;
-                border-radius: 12px;
-            }}
-            QTabBar::tab {{
-                background-color: {BG_PRIMARY};
-                color: {TEXT_SECONDARY};
-                padding: 10px 20px;
-                border: none;
-                border-top-left-radius: 8px;
-                border-top-right-radius: 8px;
-                margin-right: 2px;
-                font-size: 13px;
-            }}
-            QTabBar::tab:selected {{
-                background-color: {BG_SECONDARY};
-                color: {TEXT_PRIMARY};
-                font-weight: 600;
-            }}
-            QSpinBox, QDoubleSpinBox {{
-                background-color: {BG_PRIMARY};
-                color: {TEXT_PRIMARY};
-                border: none;
-                border-radius: 8px;
-                padding: 6px 12px;
-                font-size: 13px;
-            }}
-            QCheckBox {{
-                color: {TEXT_PRIMARY};
-                font-size: 13px;
-                spacing: 8px;
-            }}
-            QCheckBox::indicator {{
-                width: 20px;
-                height: 20px;
-                border-radius: 4px;
-                background-color: {BG_PRIMARY};
-            }}
-            QCheckBox::indicator:checked {{
-                background-color: {ACCENT};
-            }}
+            {tab_qss()}
+            {spinbox_qss()}
+            {checkbox_qss()}
         """)
 
         layout = QVBoxLayout(self)
@@ -224,7 +186,7 @@ class SettingsDialog(QDialog):
             "控制小地图追踪的采样频率。值越小越流畅但更耗 CPU。",
             level="body",
         )
-        caption.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px;")
+        caption.setStyleSheet(f"color: {TEXT_SECONDARY}; {font_qss(11)}")
         layout.addWidget(caption)
 
         layout.addWidget(NeumorphicSeparator())
@@ -247,7 +209,7 @@ class SettingsDialog(QDialog):
             "选择 GPU 加速方式。AMD/Intel 显卡需在功能管理器中安装对应支持。",
             level="body",
         )
-        gpu_caption.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px;")
+        gpu_caption.setStyleSheet(f"color: {TEXT_SECONDARY}; {font_qss(11)}")
         layout.addWidget(gpu_caption)
 
         layout.addWidget(NeumorphicSeparator())
@@ -263,7 +225,7 @@ class SettingsDialog(QDialog):
             "规划路线时最大允许的资源点数量。点位越多计算越慢。",
             level="body",
         )
-        caption2.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px;")
+        caption2.setStyleSheet(f"color: {TEXT_SECONDARY}; {font_qss(11)}")
         layout.addWidget(caption2)
 
         layout.addStretch()
@@ -374,13 +336,7 @@ class SettingsDialog(QDialog):
         scroll.setFrameShape(QFrame.NoFrame)
         scroll.setStyleSheet(f"""
             QScrollArea {{ background-color: {BG_SECONDARY}; border: none; }}
-            QScrollBar:vertical {{
-                background: {BG_SECONDARY}; width: 8px; border-radius: 4px;
-            }}
-            QScrollBar::handle:vertical {{
-                background: {SHADOW_DARK}; border-radius: 4px; min-height: 30px;
-            }}
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+            {base_scrollbar_qss(BG_SECONDARY, SHADOW_DARK, 8)}
         """)
 
         w = QWidget()
@@ -401,7 +357,7 @@ class SettingsDialog(QDialog):
             "安装可选功能以增强程序能力。\n"
             "支持断点续传、官方源下载，安全可靠。"
         )
-        dep_manager_desc.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px;")
+        dep_manager_desc.setStyleSheet(f"color: {TEXT_SECONDARY}; {font_qss(11)}")
         dep_manager_desc.setWordWrap(True)
         dep_manager_layout.addWidget(dep_manager_desc)
 
@@ -435,12 +391,12 @@ class SettingsDialog(QDialog):
             row = QHBoxLayout()
 
             name_label = QLabel(f"{display_name}:")
-            name_label.setStyleSheet(f"color: {TEXT_PRIMARY}; font-size: 12px;")
+            name_label.setStyleSheet(f"color: {TEXT_PRIMARY}; {font_qss(12)}")
             name_label.setMinimumWidth(140)
             row.addWidget(name_label)
 
             status_label = QLabel("检查中...")
-            status_label.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 12px;")
+            status_label.setStyleSheet(f"color: {TEXT_SECONDARY}; {font_qss(12)}")
             self._status_labels[key] = (status_label, modules)
             row.addWidget(status_label)
 
@@ -469,7 +425,7 @@ class SettingsDialog(QDialog):
             "如果程序无法启动或出现异常，点击下方按钮重新安装基础依赖。\n"
             "基础依赖包括：PyQt5、numpy、opencv-python、mss 等。"
         )
-        repair_desc.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 11px;")
+        repair_desc.setStyleSheet(f"color: {TEXT_SECONDARY}; {font_qss(11)}")
         repair_desc.setWordWrap(True)
         repair_layout.addWidget(repair_desc)
         
@@ -488,7 +444,7 @@ class SettingsDialog(QDialog):
             "• NVIDIA 显卡用户安装 AI 智能定位后自动启用 GPU 加速\n"
             "• AMD/Intel 显卡用户需额外安装「AMD/Intel 显卡加速」"
         )
-        info_label.setStyleSheet(f"color: {TEXT_SECONDARY}; font-size: 10px;")
+        info_label.setStyleSheet(f"color: {TEXT_SECONDARY}; {font_qss(10)}")
         info_label.setWordWrap(True)
         layout.addWidget(info_label)
         
@@ -515,10 +471,10 @@ class SettingsDialog(QDialog):
             )
             if all_installed:
                 status_label.setText("✓ 已启用")
-                status_label.setStyleSheet(f"color: {SUCCESS}; font-size: 12px;")
+                status_label.setStyleSheet(f"color: {SUCCESS}; {font_qss(12)}")
             else:
                 status_label.setText("○ 未安装")
-                status_label.setStyleSheet(f"color: {TEXT_DISABLED}; font-size: 12px;")
+                status_label.setStyleSheet(f"color: {TEXT_DISABLED}; {font_qss(12)}")
 
     def _on_repair_base(self):
         """修复基础依赖"""

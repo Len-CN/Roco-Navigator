@@ -29,10 +29,13 @@ from PyQt5.QtGui import (
 
 from .widgets.neumorphic import (
     BG_PRIMARY, BG_SECONDARY, TEXT_PRIMARY, TEXT_SECONDARY,
-    ACCENT, SUCCESS, ERROR, SHADOW_DARK, SHADOW_LIGHT
+    ACCENT, SUCCESS, ERROR, SHADOW_DARK, SHADOW_LIGHT,
+    menu_qss
 )
 
 logger = logging.getLogger(__name__)
+
+UI_FONT = "Microsoft YaHei UI"
 
 
 class OverlayHUD(QWidget):
@@ -405,7 +408,7 @@ class OverlayHUD(QWidget):
 
             # Number label
             painter.setPen(QColor("#ffffff"))
-            painter.setFont(QFont("Microsoft YaHei", 7, QFont.Bold))
+            painter.setFont(QFont(UI_FONT, 7, QFont.Bold))
             painter.drawText(int(sp.x()) - 3, int(sp.y()) + 3, str(i))
 
         painter.restore()
@@ -539,13 +542,13 @@ class OverlayHUD(QWidget):
 
         # 目标名称
         painter.setPen(QColor(TEXT_PRIMARY))
-        painter.setFont(QFont("Microsoft YaHei", 12, QFont.Bold))
+        painter.setFont(QFont(UI_FONT, 12, QFont.Bold))
         name = self._target_name if self._target_name else "无目标"
         painter.drawText(x0, y0 + 22, name)
 
         # 距离 + ETA
         painter.setPen(QColor(TEXT_SECONDARY))
-        painter.setFont(QFont("Microsoft YaHei", 10))
+        painter.setFont(QFont(UI_FONT, 10))
 
         dist_text = f"距离: {self._distance:.0f}"
         eta_text = f"预计: {self._eta_seconds:.0f}秒" if self._eta_seconds < 9999 else "预计: --"
@@ -745,23 +748,7 @@ class OverlayHUD(QWidget):
 
     def _show_context_menu(self, pos):
         menu = QMenu(self)
-        menu.setStyleSheet(f"""
-            QMenu {{
-                background-color: {BG_PRIMARY};
-                color: {TEXT_PRIMARY};
-                border: 1px solid {SHADOW_DARK};
-                border-radius: 8px;
-                padding: 4px;
-            }}
-            QMenu::item {{
-                padding: 6px 20px;
-                border-radius: 4px;
-            }}
-            QMenu::item:selected {{
-                background-color: {ACCENT};
-                color: white;
-            }}
-        """)
+        menu.setStyleSheet(menu_qss())
 
         # 预设大小
         size_menu = menu.addMenu("预设大小")

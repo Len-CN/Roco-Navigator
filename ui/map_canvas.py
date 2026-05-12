@@ -19,6 +19,8 @@ from PyQt5.QtGui import (
 
 logger = logging.getLogger(__name__)
 
+UI_FONT = "Microsoft YaHei UI"
+
 
 # 传送点 mark_type ID（来自 wiki_cache.json，"传送点"）
 HUB_MARK_TYPE = 202
@@ -376,7 +378,7 @@ class MapCanvas(QWidget):
 
     def _draw_placeholder(self, painter: QPainter):
         painter.setPen(QColor("#a0aec0"))
-        painter.setFont(QFont("Microsoft YaHei", 16))
+        painter.setFont(QFont(UI_FONT, 16))
         painter.drawText(self.rect(), Qt.AlignCenter, self._placeholder_text)
 
     def _draw_map(self, painter: QPainter):
@@ -528,7 +530,7 @@ class MapCanvas(QWidget):
                 painter.drawEllipse(sp, 6, 6)
 
             painter.setPen(QColor("#4a5568"))
-            painter.setFont(QFont("Microsoft YaHei", 8))
+            painter.setFont(QFont(UI_FONT, 8))
             painter.drawText(sp + QPointF(8, -8), str(i + 1))
         painter.restore()
 
@@ -890,6 +892,6 @@ class MapCanvas(QWidget):
             painter.drawRect(rect)
             # Label
             painter.setPen(QColor("#667eea"))
-            painter.setFont(QFont("Microsoft YaHei", 10))
+            painter.setFont(QFont(UI_FONT, 10))
             painter.drawText(rect.adjusted(4, 2, 0, 0), Qt.AlignLeft | Qt.AlignTop, "规划区域")
             painter.restore()

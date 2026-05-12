@@ -140,6 +140,7 @@ def main():
     
     # 启动 PyQt5 应用
     from PyQt5.QtWidgets import QApplication
+    from PyQt5.QtGui import QFont
     from .ui.main_window import MainWindow
 
     # 中文路径下 Qt 可能找不到平台插件，手动指定插件目录
@@ -151,6 +152,7 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("洛克导航")
     app.setApplicationVersion("0.1.0")
+    app.setFont(QFont("Microsoft YaHei UI", 10))
 
     # 创建并显示主窗口
     window = MainWindow(settings)

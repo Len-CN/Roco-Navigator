@@ -15,7 +15,8 @@ from ..widgets.neumorphic import (
     NeumorphicButton, NeumorphicCard, NeumorphicLabel,
     NeumorphicProgress,
     BG_PRIMARY, BG_SECONDARY, TEXT_PRIMARY, TEXT_SECONDARY,
-    ACCENT, SUCCESS, ERROR, SHADOW_DARK
+    ACCENT, SUCCESS, ERROR, SHADOW_DARK, BORDER, FONT_FAMILY,
+    FONT_MONO, font_qss, base_scrollbar_qss
 )
 
 
@@ -89,19 +90,21 @@ class DependencyDialog(QDialog):
         self.package_list.setStyleSheet(f"""
             QListWidget {{
                 background-color: {BG_SECONDARY};
-                border: none;
+                border: 1px solid {BORDER};
                 border-radius: 12px;
                 padding: 5px;
-                font-family: "Microsoft YaHei", sans-serif;
+                {font_qss()}
             }}
             QListWidget::item {{
-                padding: 8px;
+                padding: 8px 10px;
                 border-bottom: 1px solid {BG_PRIMARY};
+                border-radius: 6px;
             }}
             QListWidget::item:selected {{
                 background-color: {BG_PRIMARY};
                 color: {TEXT_PRIMARY};
             }}
+            {base_scrollbar_qss(BG_SECONDARY, SHADOW_DARK, 8)}
         """)
         layout.addWidget(self.package_list)
         
@@ -148,9 +151,10 @@ class DependencyDialog(QDialog):
                 border: none;
                 border-radius: 12px;
                 padding: 8px;
-                font-family: 'Consolas', 'Monaco', monospace;
+                font-family: {FONT_MONO};
                 font-size: 10px;
             }}
+            {base_scrollbar_qss("#2b2b2b", "#666666", 8)}
         """)
         layout.addWidget(self.log_text)
     

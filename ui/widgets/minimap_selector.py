@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 # Edge drag zone width (pixels)
 EDGE_ZONE = 15
+UI_FONT = "Microsoft YaHei UI"
 
 
 class MinimapSelector(QWidget):
@@ -213,8 +214,8 @@ class MinimapSelector(QWidget):
             "1-4: 预设位置(右上/左上/左下/右下) | Enter: 确认 | Esc: 取消",
         ]
 
-        font_title = QFont("Microsoft YaHei", 13, QFont.Bold)
-        font_body = QFont("Microsoft YaHei", 11)
+        font_title = QFont(UI_FONT, 13, QFont.Bold)
+        font_body = QFont(UI_FONT, 11)
         fm_title = QFontMetrics(font_title)
         fm_body = QFontMetrics(font_body)
 

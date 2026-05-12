@@ -16,7 +16,8 @@ from PyQt5.QtGui import QFont
 from ..widgets.neumorphic import (
     NeumorphicButton, NeumorphicLabel, NeumorphicSeparator,
     BG_PRIMARY, BG_SECONDARY, BG_CARD, TEXT_PRIMARY,
-    TEXT_SECONDARY, TEXT_DISABLED, ACCENT, SUCCESS
+    TEXT_SECONDARY, TEXT_DISABLED, ACCENT, SUCCESS,
+    checkbox_qss, base_scrollbar_qss, FONT_FAMILY, font_qss
 )
 
 logger = logging.getLogger(__name__)
@@ -59,7 +60,7 @@ class FilterDialog(QDialog):
         self._restore_selection()
 
     def _make_font(self, bold=False, size=13):
-        font = QFont("Microsoft YaHei", size)
+        font = QFont("Microsoft YaHei UI", size)
         font.setBold(bold)
         return font
 
@@ -96,19 +97,7 @@ class FilterDialog(QDialog):
                 border: none;
                 border-radius: 8px;
             }}
-            QScrollBar:vertical {{
-                background: {BG_PRIMARY};
-                width: 6px;
-                border-radius: 3px;
-            }}
-            QScrollBar::handle:vertical {{
-                background: {TEXT_DISABLED};
-                border-radius: 3px;
-                min-height: 30px;
-            }}
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
-                height: 0px;
-            }}
+            {base_scrollbar_qss(BG_PRIMARY, TEXT_DISABLED, 6)}
         """)
 
         scroll_content = QWidget()
@@ -117,28 +106,7 @@ class FilterDialog(QDialog):
         self._scroll_layout.setContentsMargins(10, 10, 10, 10)
         self._scroll_layout.setSpacing(8)
 
-        checkbox_style = f"""
-            QCheckBox {{
-                color: {TEXT_PRIMARY};
-                spacing: 6px;
-                background: transparent;
-            }}
-            QCheckBox::indicator {{
-                width: 20px;
-                height: 20px;
-                border-radius: 4px;
-                border: 2px solid {TEXT_DISABLED};
-                background-color: {BG_SECONDARY};
-            }}
-            QCheckBox::indicator:checked {{
-                background-color: {ACCENT};
-                border-color: {ACCENT};
-            }}
-            QCheckBox::indicator:indeterminate {{
-                background-color: {BG_SECONDARY};
-                border-color: {ACCENT};
-            }}
-        """
+        checkbox_style = checkbox_qss()
 
         for type_name, sub_names in self._grouped_data.items():
             # Filter sub-items to only those with count > 0

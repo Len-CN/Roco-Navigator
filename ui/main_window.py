@@ -21,6 +21,7 @@ from PyQt5.QtGui import QColor, QResizeEvent, QPainter, QPainterPath
 from ..config.settings import Settings
 from .widgets.title_bar import TitleBar
 from .widgets.sidebar import Sidebar
+from .widgets.route_drawer import RouteDrawer
 from .map_canvas import MapCanvas
 from .overlay_hud import OverlayHUD
 from .widgets.neumorphic import (
@@ -337,6 +338,11 @@ class MainWindow(QMainWindow):
         self._map_canvas.route_points_changed.connect(self._on_route_points_changed)
         content_layout.addWidget(self._map_canvas, stretch=1)
 
+        self._route_drawer = RouteDrawer()
+        self._connect_route_drawer_signals()
+        self._route_drawer.hide()
+        content_layout.addWidget(self._route_drawer)
+
         main_layout.addWidget(content, stretch=1)
 
         self._status_bar = StatusBarWidget()
@@ -356,18 +362,25 @@ class MainWindow(QMainWindow):
         self._sidebar.filter_type_changed.connect(self._on_filter_type_changed)
         self._sidebar.plan_route_for_type.connect(self._on_plan_route_for_type)
         self._sidebar.select_region_for_route.connect(self._on_select_region_for_route)
-        self._sidebar.route_selected_changed.connect(self._on_route_selected_changed)
-        self._sidebar.route_draw_clicked.connect(self._on_route_draw)
-        self._sidebar.route_finish_clicked.connect(self._on_route_finish)
-        self._sidebar.route_cancel_clicked.connect(self._on_route_cancel)
-        self._sidebar.route_save_clicked.connect(self._on_route_save)
-        self._sidebar.route_load_clicked.connect(self._on_route_load)
-        self._sidebar.route_rename_clicked.connect(self._on_route_rename)
-        self._sidebar.route_duplicate_clicked.connect(self._on_route_duplicate)
-        self._sidebar.route_delete_clicked.connect(self._on_route_delete)
-        self._sidebar.route_import_clicked.connect(self._on_route_import)
-        self._sidebar.route_export_current_clicked.connect(self._on_route_export_current)
-        self._sidebar.route_export_all_clicked.connect(self._on_route_export_all)
+        self._sidebar.route_drawer_clicked.connect(self._toggle_route_drawer)
+
+    def _connect_route_drawer_signals(self):
+        self._route_drawer.route_selected_changed.connect(self._on_route_selected_changed)
+        self._route_drawer.route_draw_clicked.connect(self._on_route_draw)
+        self._route_drawer.route_finish_clicked.connect(self._on_route_finish)
+        self._route_drawer.route_cancel_clicked.connect(self._on_route_cancel)
+        self._route_drawer.route_save_clicked.connect(self._on_route_save)
+        self._route_drawer.route_load_clicked.connect(self._on_route_load)
+        self._route_drawer.route_rename_clicked.connect(self._on_route_rename)
+        self._route_drawer.route_duplicate_clicked.connect(self._on_route_duplicate)
+        self._route_drawer.route_delete_clicked.connect(self._on_route_delete)
+        self._route_drawer.route_import_clicked.connect(self._on_route_import)
+        self._route_drawer.route_export_current_clicked.connect(self._on_route_export_current)
+        self._route_drawer.route_export_all_clicked.connect(self._on_route_export_all)
+        self._route_drawer.closed.connect(lambda: None)
+
+    def _toggle_route_drawer(self):
+        self._route_drawer.setVisible(not self._route_drawer.isVisible())
 
     # ==================== Tracking ====================
 
@@ -580,7 +593,7 @@ class MainWindow(QMainWindow):
                                    hub_indices=hub_indices)
         self._map_canvas.finish_route_editing()
         self._map_canvas.clear_selected_region()
-        self._sidebar.set_current_route_id("")
+        self._route_drawer.set_current_route_id("")
         self._refresh_route_library()
         self._update_route_info()
         tp_hint = f", {len(teleport_segments)} 段瞬移" if teleport_segments else ""
@@ -646,7 +659,7 @@ class MainWindow(QMainWindow):
     # ==================== Route Library ====================
 
     def _refresh_route_library(self):
-        self._sidebar.set_routes(self._route_manager.get_all(), self._current_route_id)
+        self._route_drawer.set_routes(self._route_manager.get_all(), self._current_route_id)
 
     def _current_route_points(self):
         return self._map_canvas.get_route_points()
@@ -656,13 +669,21 @@ class MainWindow(QMainWindow):
         return total_distance(points) if len(points) >= 2 else 0.0
 
     def _update_route_info(self):
-        self._sidebar.set_route_info(
-            len(self._current_route_points()),
-            self._current_route_distance(),
+        point_count = len(self._current_route_points())
+        distance = self._current_route_distance()
+        self._route_drawer.set_route_info(
+            point_count,
+            distance,
             dirty=self._route_dirty,
             editing=self._route_editing,
         )
-        self._sidebar.set_route_editing_active(self._route_editing)
+        self._route_drawer.set_route_editing_active(self._route_editing)
+        self._sidebar.set_route_summary(
+            point_count,
+            distance,
+            dirty=self._route_dirty,
+            editing=self._route_editing,
+        )
 
     def _on_route_points_changed(self, _points):
         self._route_dirty = True
@@ -691,7 +712,7 @@ class MainWindow(QMainWindow):
         self._navigator.stop()
         self._map_canvas.finish_route_editing()
         self._map_canvas.set_route(route.points)
-        self._sidebar.set_current_route_id(route.id)
+        self._route_drawer.set_current_route_id(route.id)
         self._sidebar.set_nav_progress(0, f"已加载路线: {route.name}")
         self._update_route_info()
 
@@ -709,7 +730,7 @@ class MainWindow(QMainWindow):
         else:
             self._current_route_id = ""
             self._route_snapshot = []
-            self._sidebar.set_current_route_id("")
+            self._route_drawer.set_current_route_id("")
             self._map_canvas.start_route_drawing(clear=True)
             self._sidebar.set_nav_progress(0, "手工绘制: 左键逐点添加路线")
         self._update_route_info()
@@ -771,12 +792,12 @@ class MainWindow(QMainWindow):
         self._route_snapshot = []
         self._map_canvas.finish_route_editing()
         self._refresh_route_library()
-        self._sidebar.set_current_route_id(self._current_route_id)
+        self._route_drawer.set_current_route_id(self._current_route_id)
         self._sidebar.set_nav_progress(0, f"已保存路线: {route.name}")
         self._update_route_info()
 
     def _on_route_load(self):
-        route_id = self._sidebar.selected_route_id()
+        route_id = self._route_drawer.selected_route_id()
         if not route_id:
             QMessageBox.information(self, "提示", "请先在路线库中选择路线。")
             return
@@ -790,7 +811,7 @@ class MainWindow(QMainWindow):
         self._load_route_to_canvas(route)
 
     def _on_route_rename(self):
-        route_id = self._sidebar.selected_route_id() or self._current_route_id
+        route_id = self._route_drawer.selected_route_id() or self._current_route_id
         route = self._route_manager.get_by_id(route_id)
         if route is None:
             QMessageBox.information(self, "提示", "请先选择已保存的路线。")
@@ -802,10 +823,10 @@ class MainWindow(QMainWindow):
         self._route_manager.update(route)
         self._route_manager.save()
         self._refresh_route_library()
-        self._sidebar.set_current_route_id(route.id)
+        self._route_drawer.set_current_route_id(route.id)
 
     def _on_route_duplicate(self):
-        route_id = self._sidebar.selected_route_id() or self._current_route_id
+        route_id = self._route_drawer.selected_route_id() or self._current_route_id
         route = self._route_manager.duplicate(route_id)
         if route is None:
             QMessageBox.information(self, "提示", "请先选择已保存的路线。")
@@ -815,7 +836,7 @@ class MainWindow(QMainWindow):
         self._load_route_to_canvas(route)
 
     def _on_route_delete(self):
-        route_id = self._sidebar.selected_route_id() or self._current_route_id
+        route_id = self._route_drawer.selected_route_id() or self._current_route_id
         route = self._route_manager.get_by_id(route_id)
         if route is None:
             QMessageBox.information(self, "提示", "请先选择已保存的路线。")
