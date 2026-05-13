@@ -213,6 +213,8 @@ class PackageManager:
         
         if progress_callback:
             progress_callback(f"正在安装 {package_name}...")
+            if is_frozen():
+                progress_callback("首次安装可选依赖会下载独立 Python 运行时，请稍候...")
         
         pip_args = ["install", package_name, "--no-cache-dir"]
         if is_frozen():

@@ -21,13 +21,8 @@ if _pkg_name not in sys.modules:
 __package__ = _pkg_name
 
 from .utils.file_utils import add_user_packages_to_path
-from .utils.runtime import run_embedded_pip
 
 add_user_packages_to_path()
-
-if "--run-pip" in sys.argv:
-    pip_index = sys.argv.index("--run-pip")
-    sys.exit(run_embedded_pip(sys.argv[pip_index + 1:]))
 
 # IMPORTANT: Import torch before PyQt5 to avoid DLL conflicts
 # PyQt5 and PyTorch both use different versions of some DLLs (like c10.dll)
