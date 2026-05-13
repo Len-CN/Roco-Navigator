@@ -31,7 +31,7 @@ from .widgets.neumorphic import (
 from ..core.screen_capture import ScreenCapture
 from ..core.minimap_detector import MinimapDetector
 from ..core.position_tracker import PositionTracker, TrackingState, TrackingConfig
-from ..core.pathfinding import PathPlanner, total_distance
+from ..core.pathfinding import PathPlanner, TELEPORT_HUB_TYPES, total_distance
 from ..core.navigation import Navigator, NavigationState
 
 # Data modules
@@ -504,20 +504,94 @@ class MainWindow(QMainWindow):
 
     def _on_filter_type_changed(self, selected_names):
         """点位类型筛选 - selected_names is a set of mark_type_name strings, or empty for all"""
-        display = self._resource_manager.to_display_list(
-            mark_type_names=selected_names if selected_names else None
-        )
-        self._map_canvas.set_resources(display)
+        display = self._refresh_map_resources()
         logger.info("Filter changed: %d selected (%d points)",
-                     len(selected_names) if selected_names else 0, len(display))
+                     len(selected_names) if selected_names else 0,
+                     len(display))
 
     def _get_hubs(self):
         """获取传送中继点坐标列表（按 settings 控制启停）"""
-        from ..core.pathfinding import TELEPORT_HUB_TYPES
         if not self._settings.get("navigation.use_teleport_hubs", True):
             return []
         return [(r.x, r.y) for r in self._resource_manager.get_all()
                 if r.mark_type_name in TELEPORT_HUB_TYPES]
+
+    def _current_filter_resources(self):
+        """按当前侧边栏筛选返回普通显示资源。"""
+        selected_names = self._sidebar._get_selected_mark_type_names()
+        return self._resource_manager.to_display_list(
+            mark_type_names=selected_names if selected_names else None
+        )
+
+    @staticmethod
+    def _merge_resources_by_id_or_coord(resources, extra_resources):
+        """合并资源列表，优先用 id 去重，缺失 id 时用坐标兜底。"""
+        merged = []
+        seen = set()
+        for res in list(resources or []) + list(extra_resources or []):
+            key = res.get("id") or (round(float(res.get("x", 0)), 3),
+                                    round(float(res.get("y", 0)), 3),
+                                    res.get("mark_type_name", ""))
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(res)
+        return merged
+
+    @staticmethod
+    def _resources_for_route_edit_display(base_resources, all_resources):
+        """手工编辑时显示当前筛选点位 + 全部传送点。"""
+        teleports = [
+            r for r in all_resources
+            if r.get("mark_type_name") in TELEPORT_HUB_TYPES
+        ]
+        return MainWindow._merge_resources_by_id_or_coord(base_resources, teleports)
+
+    @staticmethod
+    def _route_teleport_metadata(points, teleport_points):
+        """按路线点与传送点坐标匹配生成虚线段和传送点索引。"""
+        hub_set = {
+            (round(float(x), 3), round(float(y), 3))
+            for x, y in teleport_points
+        }
+        hub_indices = set()
+        for i, pt in enumerate(points or []):
+            key = (round(float(pt[0]), 3), round(float(pt[1]), 3))
+            if key in hub_set:
+                hub_indices.add(i)
+        teleport_segments = {
+            i for i in range(max(0, len(points or []) - 1))
+            if i + 1 in hub_indices
+        }
+        return teleport_segments, hub_indices
+
+    def _manual_route_metadata(self, points):
+        teleports = [
+            (r.x, r.y) for r in self._resource_manager.get_all()
+            if r.mark_type_name in TELEPORT_HUB_TYPES
+        ]
+        return self._route_teleport_metadata(points, teleports)
+
+    def _refresh_manual_route_metadata(self):
+        points = self._current_route_points()
+        teleport_segments, hub_indices = self._manual_route_metadata(points)
+        self._map_canvas.set_route_metadata(
+            teleport_segments=teleport_segments,
+            hub_indices=hub_indices,
+        )
+
+    def _refresh_map_resources(self, include_all_teleports: Optional[bool] = None):
+        """刷新画布资源点；仅手工编辑时额外显示所有传送点。"""
+        include = self._route_editing if include_all_teleports is None else include_all_teleports
+        base = self._current_filter_resources()
+        if include:
+            display = self._resources_for_route_edit_display(
+                base, self._resource_manager.to_display_list()
+            )
+        else:
+            display = base
+        self._map_canvas.set_resources(display)
+        return display
 
     def _get_endpoint_mode(self):
         """从 settings 读终点策略。返回 'open' / 'loop'"""
@@ -604,6 +678,8 @@ class MainWindow(QMainWindow):
             self._sidebar.set_nav_progress(0, "规划失败")
             self._map_canvas.clear_route()
             self._map_canvas.clear_selected_region()
+            self._route_editing = False
+            self._refresh_map_resources(include_all_teleports=False)
             return
 
         selected = self._sidebar._get_selected_mark_type_names()
@@ -622,6 +698,7 @@ class MainWindow(QMainWindow):
                                    hub_indices=hub_indices)
         self._map_canvas.finish_route_editing()
         self._map_canvas.clear_selected_region()
+        self._refresh_map_resources(include_all_teleports=False)
         self._route_drawer.set_current_route_id("")
         self._refresh_route_library()
         self._update_route_info()
@@ -635,6 +712,8 @@ class MainWindow(QMainWindow):
         self._sidebar.set_nav_progress(0, f"规划失败: {message[:80]}")
         self._map_canvas.clear_route()
         self._map_canvas.clear_selected_region()
+        self._route_editing = False
+        self._refresh_map_resources(include_all_teleports=False)
         logger.error("Route planning failed: %s", message)
 
     def _on_start_nav(self):
@@ -725,6 +804,8 @@ class MainWindow(QMainWindow):
         self._route_dirty = True
         if self._navigator.is_active:
             self._navigator.stop()
+        if self._route_editing:
+            self._refresh_manual_route_metadata()
         self._update_route_info()
 
     def _on_route_selected_changed(self, route_id):
@@ -749,7 +830,13 @@ class MainWindow(QMainWindow):
         if self._navigator.is_active:
             self._navigator.stop()
         self._map_canvas.finish_route_editing()
-        self._map_canvas.set_route(route.points)
+        teleport_segments, hub_indices = self._manual_route_metadata(route.points)
+        self._map_canvas.set_route(
+            route.points,
+            teleport_segments=teleport_segments,
+            hub_indices=hub_indices,
+        )
+        self._refresh_map_resources(include_all_teleports=False)
         self._route_drawer.set_current_route_id(route.id)
         self._sidebar.set_nav_progress(0, f"已加载路线: {route.name}")
         self._update_route_info()
@@ -774,11 +861,14 @@ class MainWindow(QMainWindow):
             self._map_canvas.start_route_drawing(clear=True)
             self._route_drawer.set_draw_hint("绘制中: 在地图上左键逐点添加路线，至少添加 2 个点后可完成并保存。")
             self._sidebar.set_nav_progress(0, "正在绘制路线")
+        self._refresh_map_resources(include_all_teleports=True)
+        self._refresh_manual_route_metadata()
         self._update_route_info()
 
     def _on_route_finish(self):
         self._route_editing = False
         self._map_canvas.finish_route_editing()
+        self._refresh_map_resources(include_all_teleports=False)
         self._route_drawer.set_draw_hint("路线编辑已完成，可保存到路线库，或返回侧边栏开始导航。")
         self._sidebar.set_nav_progress(0, "路线编辑已完成，可保存或开始导航")
         self._update_route_info()
@@ -787,12 +877,18 @@ class MainWindow(QMainWindow):
         self._route_editing = False
         self._map_canvas.finish_route_editing()
         if self._route_snapshot:
-            self._map_canvas.set_route(self._route_snapshot)
+            teleport_segments, hub_indices = self._manual_route_metadata(self._route_snapshot)
+            self._map_canvas.set_route(
+                self._route_snapshot,
+                teleport_segments=teleport_segments,
+                hub_indices=hub_indices,
+            )
             self._route_snapshot = []
             self._route_dirty = False
         elif not self._current_route_id:
             self._map_canvas.clear_route()
             self._route_dirty = False
+        self._refresh_map_resources(include_all_teleports=False)
         self._route_drawer.set_draw_hint("已取消编辑。点击“绘制 / 编辑”可重新开始。")
         self._sidebar.set_nav_progress(0, "已取消路线编辑")
         self._update_route_info()
@@ -834,6 +930,7 @@ class MainWindow(QMainWindow):
         self._route_editing = False
         self._route_snapshot = []
         self._map_canvas.finish_route_editing()
+        self._refresh_map_resources(include_all_teleports=False)
         self._refresh_route_library()
         self._route_drawer.set_current_route_id(self._current_route_id)
         self._route_drawer.set_draw_hint("路线已保存。可以继续编辑、加载其他路线，或返回侧边栏开始导航。")
@@ -1058,6 +1155,7 @@ class MainWindow(QMainWindow):
             resource_rel_points=resource_rel,
             visited_indices=self._navigator.visited_indices,
             current_route_index=nav_info.current_target_index,
+            teleport_segments=self._map_canvas.get_route_teleport_segments(),
         )
 
     # ==================== Data ====================
@@ -1179,7 +1277,7 @@ class MainWindow(QMainWindow):
             logger.info("Skipped %d points with unknown mark_type", skipped)
 
         count = self._resource_manager.count
-        self._map_canvas.set_resources(self._resource_manager.to_display_list())
+        self._refresh_map_resources()
 
         # Load WIKI icons
         import os

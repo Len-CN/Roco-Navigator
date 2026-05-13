@@ -87,6 +87,7 @@ class MapCanvas(QWidget):
         self._route_edit_mode: Optional[str] = None  # None / "draw" / "edit"
         self._selected_route_index: int = -1
         self._dragging_route_point: bool = False
+        self._route_point_moved: bool = False
 
         # 资源点
         self._resource_points: List[dict] = []
@@ -149,6 +150,7 @@ class MapCanvas(QWidget):
         self._route_edit_mode = "draw"
         self._selected_route_index = -1
         self._dragging_route_point = False
+        self._route_point_moved = False
         self.setFocus(Qt.MouseFocusReason)
         self.setCursor(Qt.CrossCursor)
         self.update()
@@ -159,6 +161,7 @@ class MapCanvas(QWidget):
         self._route_edit_mode = "edit"
         self._selected_route_index = -1
         self._dragging_route_point = False
+        self._route_point_moved = False
         self.setFocus(Qt.MouseFocusReason)
         self.setCursor(Qt.PointingHandCursor)
         self.update()
@@ -168,11 +171,16 @@ class MapCanvas(QWidget):
         self._route_edit_mode = None
         self._selected_route_index = -1
         self._dragging_route_point = False
+        self._route_point_moved = False
         self.setCursor(Qt.ArrowCursor)
         self.update()
 
     def get_route_points(self) -> List[Tuple[float, float]]:
         return [(p.x(), p.y()) for p in self._route_points]
+
+    def get_route_teleport_segments(self) -> set:
+        """获取当前路线中的传送段索引集合。"""
+        return set(self._teleport_segments)
 
     def load_map_image(self, image_path: str) -> bool:
         """加载地图图像"""
@@ -255,6 +263,13 @@ class MapCanvas(QWidget):
         self._route_points = [QPointF(x, y) for x, y in points]
         self._current_target_index = current_index
         self._visited_indices = visited or set()
+        self._teleport_segments = teleport_segments or set()
+        self._hub_indices = hub_indices or set()
+        self.update()
+
+    def set_route_metadata(self, teleport_segments: Optional[set] = None,
+                           hub_indices: Optional[set] = None):
+        """更新路线绘制元数据，不改变路线点。"""
         self._teleport_segments = teleport_segments or set()
         self._hub_indices = hub_indices or set()
         self.update()
@@ -673,7 +688,10 @@ class MapCanvas(QWidget):
     def mouseReleaseEvent(self, event: QMouseEvent):
         if self.is_route_editing:
             if event.button() == Qt.LeftButton:
+                if self._route_point_moved:
+                    self._snap_selected_route_point(event.pos().x(), event.pos().y())
                 self._dragging_route_point = False
+                self._route_point_moved = False
             elif event.button() in (Qt.RightButton, Qt.MiddleButton):
                 self._dragging = False
                 self.setCursor(Qt.CrossCursor if self._route_edit_mode == "draw" else Qt.ArrowCursor)
@@ -746,6 +764,28 @@ class MapCanvas(QWidget):
     def _emit_route_points_changed(self):
         self.route_points_changed.emit(self.get_route_points())
 
+    def _snap_to_resource(self, sx: float, sy: float) -> QPointF:
+        """点击/拖动靠近资源图标时，吸附到最近资源点。"""
+        res = self._nearest_resource(sx, sy)
+        if res is None:
+            return self.screen_to_world(sx, sy)
+        return QPointF(float(res.get("x", 0)), float(res.get("y", 0)))
+
+    def _nearest_resource(self, sx: float, sy: float, radius: Optional[int] = None):
+        """按屏幕距离查找最近资源点。"""
+        if not self._resource_points:
+            return None
+        hit_radius = radius if radius is not None else max(12, self._icon_size // 2 + 4)
+        r2 = hit_radius * hit_radius
+        best, best_d = None, r2
+        for res in self._resource_points:
+            sp = self.world_to_screen(float(res.get("x", 0)), float(res.get("y", 0)))
+            dx, dy = sx - sp.x(), sy - sp.y()
+            d = dx * dx + dy * dy
+            if d <= best_d:
+                best, best_d = res, d
+        return best
+
     def _handle_route_edit_press(self, event: QMouseEvent):
         if event.button() in (Qt.RightButton, Qt.MiddleButton):
             self._dragging = True
@@ -758,12 +798,13 @@ class MapCanvas(QWidget):
             return
 
         sx, sy = event.pos().x(), event.pos().y()
-        world = self.screen_to_world(sx, sy)
+        world = self._snap_to_resource(sx, sy)
         near_idx = self._nearest_waypoint_index(sx, sy)
 
         if near_idx >= 0:
             self._selected_route_index = near_idx
             self._dragging_route_point = True
+            self._route_point_moved = False
             self.setCursor(Qt.ClosedHandCursor)
             self.update()
             return
@@ -774,6 +815,7 @@ class MapCanvas(QWidget):
                 self._route_points.insert(seg_idx + 1, world)
                 self._selected_route_index = seg_idx + 1
                 self._dragging_route_point = True
+                self._route_point_moved = False
                 self._clear_route_plan_metadata()
                 self._emit_route_points_changed()
                 self.update()
@@ -796,6 +838,7 @@ class MapCanvas(QWidget):
 
         if self._dragging_route_point and 0 <= self._selected_route_index < len(self._route_points):
             self._route_points[self._selected_route_index] = self.screen_to_world(sx, sy)
+            self._route_point_moved = True
             self._clear_route_plan_metadata()
             self._emit_route_points_changed()
             self.update()
@@ -817,6 +860,20 @@ class MapCanvas(QWidget):
         self._clear_route_plan_metadata()
         self._emit_route_points_changed()
         self.update()
+
+    def _snap_selected_route_point(self, sx: float, sy: float):
+        if not (0 <= self._selected_route_index < len(self._route_points)):
+            return
+        res = self._nearest_resource(sx, sy)
+        if res is None:
+            return
+        snapped = QPointF(float(res.get("x", 0)), float(res.get("y", 0)))
+        current = self._route_points[self._selected_route_index]
+        if current != snapped:
+            self._route_points[self._selected_route_index] = snapped
+            self._clear_route_plan_metadata()
+            self._emit_route_points_changed()
+            self.update()
 
     def _clear_route_plan_metadata(self):
         self._current_target_index = -1

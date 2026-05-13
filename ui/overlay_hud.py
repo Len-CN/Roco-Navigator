@@ -124,6 +124,7 @@ class OverlayHUD(QWidget):
         self._resource_rel_points: List[dict] = []
         self._visited_indices: set = set()
         self._current_route_index: int = 0
+        self._teleport_segments: set = set()
 
         # 地图缩放
         self._crop_size: int = 350
@@ -173,7 +174,8 @@ class OverlayHUD(QWidget):
                           direction_to_target: float = 0.0,
                            resource_rel_points: Optional[List[dict]] = None,
                            visited_indices: Optional[set] = None,
-                           current_route_index: int = 0):
+                           current_route_index: int = 0,
+                           teleport_segments: Optional[set] = None):
         """
         更新所有导航数据
 
@@ -192,6 +194,7 @@ class OverlayHUD(QWidget):
             current_idx: 当前目标索引
             total: 总目标数
             resource_rel_points: 资源点在裁剪图中的相对坐标列表
+            teleport_segments: 传送段索引集合，i 表示 route[i] -> route[i+1]
         """
         self._map_crop = map_crop
         self._player_rel_pos = player_rel
@@ -208,6 +211,7 @@ class OverlayHUD(QWidget):
         self._resource_rel_points = resource_rel_points or []
         self._visited_indices = visited_indices or set()
         self._current_route_index = current_route_index
+        self._teleport_segments = teleport_segments or set()
 
         # 计算缩放比
         if map_crop is not None:
@@ -387,8 +391,13 @@ class OverlayHUD(QWidget):
             p1 = self._rel_to_screen(*self._route_rel_points[i])
             p2 = self._rel_to_screen(*self._route_rel_points[i + 1])
 
-            if (i + 1) in self._visited_indices or i + 1 < self._current_route_index:
+            visited = (i + 1) in self._visited_indices or i + 1 < self._current_route_index
+            is_teleport = i in self._teleport_segments
+
+            if visited:
                 pen = QPen(QColor("#c0c4ca"), 2, Qt.SolidLine)
+            elif is_teleport:
+                pen = QPen(QColor("#9b8cff"), 3, Qt.DashLine)
             else:
                 pen = QPen(QColor(ACCENT), 3, Qt.SolidLine)
             pen.setCapStyle(Qt.RoundCap)
