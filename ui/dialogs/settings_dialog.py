@@ -8,7 +8,7 @@ import logging
 import sys
 import os
 from PyQt5.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QLabel,
+    QVBoxLayout, QHBoxLayout, QLabel,
     QSpinBox, QDoubleSpinBox, QCheckBox,
     QTabWidget, QWidget, QScrollArea, QTextEdit,
     QMessageBox, QFrame
@@ -16,6 +16,7 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, pyqtSignal
 
 from ...config.settings import Settings
+from .frameless_dialog import FramelessRoundedDialog
 from ..widgets.neumorphic import (
     NeumorphicButton, NeumorphicCard, NeumorphicLabel,
     NeumorphicSlider, NeumorphicSeparator, NeumorphicProgress,
@@ -28,20 +29,20 @@ from ..widgets.neumorphic import (
 logger = logging.getLogger(__name__)
 
 
-class SettingsDialog(QDialog):
+class SettingsDialog(FramelessRoundedDialog):
     """设置对话框"""
 
     settings_changed = pyqtSignal()
 
     def __init__(self, settings: Settings, parent=None):
-        super().__init__(parent)
+        super().__init__(BG_PRIMARY, parent=parent)
         self._settings = settings
         self._main_window = parent  # MainWindow reference for install process
         self.setWindowTitle("设置")
         self.setFixedSize(550, 720)
         self.setStyleSheet(f"""
             QDialog {{
-                background-color: {BG_PRIMARY};
+                background-color: transparent;
             }}
             {tab_qss()}
             {spinbox_qss()}
@@ -49,10 +50,9 @@ class SettingsDialog(QDialog):
         """)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(16)
 
-        # Title
         title = NeumorphicLabel("设置", level="title")
         layout.addWidget(title)
 

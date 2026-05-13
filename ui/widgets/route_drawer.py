@@ -1,17 +1,17 @@
-"""路线库抽屉组件。"""
+"""路线库侧栏组件。"""
 
-from PyQt5.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout
-from PyQt5.QtCore import pyqtSignal
+from PyQt5.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QScrollArea
+from PyQt5.QtCore import Qt, pyqtSignal
 
 from .neumorphic import (
     NeumorphicButton, NeumorphicComboBox, NeumorphicLabel,
-    NeumorphicSeparator, BG_SECONDARY, BG_CARD, TEXT_SECONDARY,
-    RADIUS_LG, base_scrollbar_qss
+    NeumorphicSeparator, BG_SECONDARY, TEXT_DISABLED, RADIUS_LG,
+    base_scrollbar_qss
 )
 
 
 class RouteDrawer(QWidget):
-    """附着在主窗口右侧的路线库操作面板。"""
+    """替换主侧边栏显示的路线库操作面板。"""
 
     route_selected_changed = pyqtSignal(object)
     route_draw_clicked = pyqtSignal()
@@ -29,7 +29,7 @@ class RouteDrawer(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedWidth(300)
+        self.setFixedWidth(270)
         self.setObjectName("routeDrawer")
         self.setStyleSheet(f"""
             QWidget#routeDrawer {{
@@ -38,8 +38,24 @@ class RouteDrawer(QWidget):
             }}
         """)
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 16, 16, 16)
+        outer_layout = QVBoxLayout(self)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setStyleSheet(f"""
+            QScrollArea {{
+                background: transparent;
+                border: none;
+            }}
+            {base_scrollbar_qss(BG_SECONDARY, TEXT_DISABLED, 6)}
+        """)
+
+        content = QWidget()
+        content.setStyleSheet("background: transparent;")
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(16, 18, 16, 18)
         layout.setSpacing(12)
 
         header = QHBoxLayout()
@@ -47,8 +63,8 @@ class RouteDrawer(QWidget):
         title = NeumorphicLabel("路线库", level="title")
         header.addWidget(title)
         header.addStretch()
-        close_btn = NeumorphicButton("收起")
-        close_btn.setFixedWidth(72)
+        close_btn = NeumorphicButton("返回")
+        close_btn.setFixedWidth(64)
         close_btn.clicked.connect(self._on_close)
         header.addWidget(close_btn)
         layout.addLayout(header)
@@ -66,6 +82,10 @@ class RouteDrawer(QWidget):
         layout.addWidget(self._route_info_label)
 
         layout.addWidget(NeumorphicSeparator())
+
+        self._draw_hint_label = NeumorphicLabel("绘制路线前请先点击下方按钮。", level="caption")
+        self._draw_hint_label.setWordWrap(True)
+        layout.addWidget(self._draw_hint_label)
 
         edit_label = NeumorphicLabel("编辑", level="section")
         layout.addWidget(edit_label)
@@ -130,9 +150,11 @@ class RouteDrawer(QWidget):
         layout.addWidget(self._route_export_all_btn)
 
         layout.addStretch()
+        scroll.setWidget(content)
+        outer_layout.addWidget(scroll)
+        self.set_route_editing_active(False)
 
     def _on_close(self):
-        self.hide()
         self.closed.emit()
 
     def _on_route_selected(self, _index: int):
@@ -173,3 +195,6 @@ class RouteDrawer(QWidget):
         self._route_draw_btn.setEnabled(not active)
         self._route_finish_btn.setEnabled(active)
         self._route_cancel_btn.setEnabled(active)
+
+    def set_draw_hint(self, text: str):
+        self._draw_hint_label.setText(text)

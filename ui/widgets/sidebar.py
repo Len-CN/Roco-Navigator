@@ -1,22 +1,77 @@
 """
 侧边栏组件
 
-常用追踪/导航操作常驻，其余功能折叠收纳。
+追踪、导航、路线、显示、数据和设置功能常驻显示。
 """
 
 import logging
-from PyQt5.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QScrollArea
+from PyQt5.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QScrollArea, QLabel
 from PyQt5.QtCore import Qt, pyqtSignal
 
 from .neumorphic import (
-    CollapsibleSection, NeumorphicButton, NeumorphicLabel,
-    NeumorphicSeparator, NeumorphicProgress, NeumorphicComboBox,
+    NeumorphicButton, NeumorphicLabel,
+    NeumorphicSeparator, NeumorphicComboBox,
     NeumorphicSwitch, StatusIndicator,
-    BG_SECONDARY, TEXT_DISABLED, ACCENT, base_scrollbar_qss
+    BG_SECONDARY, TEXT_DISABLED, TEXT_SECONDARY, TEXT_PRIMARY,
+    font_qss, base_scrollbar_qss
 )
 from ..dialogs.filter_dialog import FilterDialog
 
 logger = logging.getLogger(__name__)
+
+
+class SidebarSection(QWidget):
+    """侧边栏常驻分区。"""
+
+    def __init__(self, title: str, parent=None):
+        super().__init__(parent)
+        self.setObjectName("sidebarSection")
+        self.setStyleSheet(f"""
+            QWidget#sidebarSection {{
+                background-color: transparent;
+            }}
+            QLabel#sectionTitle {{
+                color: {TEXT_PRIMARY};
+                background-color: transparent;
+                border: none;
+                padding: 0;
+                {font_qss(15, 700)}
+            }}
+            QLabel#sectionSubtitle {{
+                color: {TEXT_SECONDARY};
+                background-color: transparent;
+                border: none;
+                padding: 0 2px;
+                {font_qss(12, 400)}
+            }}
+            QWidget#sectionContent {{
+                background-color: transparent;
+            }}
+        """)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+
+        title_label = QLabel(title)
+        title_label.setObjectName("sectionTitle")
+        title_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        layout.addWidget(title_label)
+
+        self._content = QWidget()
+        self._content.setObjectName("sectionContent")
+        self._content_layout = QVBoxLayout(self._content)
+        self._content_layout.setContentsMargins(0, 0, 0, 6)
+        self._content_layout.setSpacing(8)
+        layout.addWidget(self._content)
+
+    def add_widget(self, widget):
+        if isinstance(widget, QLabel):
+            widget.setWordWrap(True)
+        self._content_layout.addWidget(widget)
+
+    def add_layout(self, layout):
+        self._content_layout.addLayout(layout)
 
 
 class Sidebar(QWidget):
@@ -73,10 +128,15 @@ class Sidebar(QWidget):
         content_layout.setSpacing(12)
 
         content_layout.addWidget(self._build_tracking_section())
+        content_layout.addWidget(NeumorphicSeparator())
         content_layout.addWidget(self._build_navigation_section())
-        content_layout.addWidget(self._build_route_entry_section())
+        content_layout.addWidget(NeumorphicSeparator())
         content_layout.addWidget(self._build_display_section())
+        content_layout.addWidget(NeumorphicSeparator())
+        content_layout.addWidget(self._build_route_entry_section())
+        content_layout.addWidget(NeumorphicSeparator())
         content_layout.addWidget(self._build_data_section())
+        content_layout.addWidget(NeumorphicSeparator())
         content_layout.addWidget(self._build_settings_section())
         content_layout.addStretch()
 
@@ -84,12 +144,14 @@ class Sidebar(QWidget):
         outer_layout.addWidget(scroll)
 
     def _build_tracking_section(self):
-        section = CollapsibleSection("位置追踪", expanded=True)
+        section = SidebarSection("位置追踪")
 
         status_row = QHBoxLayout()
         self._tracking_indicator = StatusIndicator()
         self._tracking_indicator.set_status("idle")
         self._tracking_status_label = NeumorphicLabel("空闲", level="body")
+        self._tracking_status_label.setWordWrap(True)
+        self._tracking_status_label.setMinimumWidth(0)
         status_row.addWidget(self._tracking_indicator)
         status_row.addWidget(self._tracking_status_label)
         status_row.addStretch()
@@ -112,7 +174,7 @@ class Sidebar(QWidget):
         return section
 
     def _build_navigation_section(self):
-        section = CollapsibleSection("导航", expanded=True)
+        section = SidebarSection("导航")
 
         nav_row = QHBoxLayout()
         nav_row.setSpacing(8)
@@ -125,29 +187,41 @@ class Sidebar(QWidget):
         nav_row.addWidget(self._stop_nav_btn)
         section.add_layout(nav_row)
 
-        self._nav_progress = NeumorphicProgress()
-        self._nav_progress.setValue(0)
-        section.add_widget(self._nav_progress)
-
         self._nav_info_label = NeumorphicLabel("暂无活动路线", level="caption")
         section.add_widget(self._nav_info_label)
         return section
 
     def _build_route_entry_section(self):
-        section = CollapsibleSection("路线库", expanded=False)
+        section = SidebarSection("路线库")
+
+        plan_row = QHBoxLayout()
+        plan_row.setSpacing(8)
+        self._plan_scope = NeumorphicComboBox()
+        self._plan_scope.addItems(["全图", "框选区域"])
+        self._plan_scope.setFixedWidth(104)
+        self._plan_for_type_btn = NeumorphicButton("规划路线")
+        self._plan_for_type_btn.clicked.connect(self._on_plan_for_type)
+        plan_row.addWidget(self._plan_scope)
+        plan_row.addWidget(self._plan_for_type_btn)
+        section.add_layout(plan_row)
+
+        section.add_widget(NeumorphicSeparator())
+
         self._route_summary_label = NeumorphicLabel("当前画布暂无路线", level="caption")
         section.add_widget(self._route_summary_label)
 
-        self._open_route_drawer_btn = NeumorphicButton("打开路线抽屉", primary=True)
+        self._open_route_drawer_btn = NeumorphicButton("进入路线库", primary=True)
         self._open_route_drawer_btn.clicked.connect(self.route_drawer_clicked.emit)
         section.add_widget(self._open_route_drawer_btn)
         return section
 
     def _build_display_section(self):
-        section = CollapsibleSection("显示", expanded=False)
+        section = SidebarSection("显示")
 
         overlay_row = QHBoxLayout()
         overlay_label = NeumorphicLabel("HUD 悬浮窗", level="body")
+        overlay_label.setWordWrap(True)
+        overlay_label.setMinimumWidth(0)
         self._overlay_check = NeumorphicSwitch()
         self._overlay_check.setChecked(True)
         self._overlay_check.stateChanged.connect(
@@ -160,6 +234,8 @@ class Sidebar(QWidget):
 
         passthrough_row = QHBoxLayout()
         passthrough_label = NeumorphicLabel("悬浮窗穿透", level="body")
+        passthrough_label.setWordWrap(True)
+        passthrough_label.setMinimumWidth(0)
         self._overlay_passthrough_check = NeumorphicSwitch()
         self._overlay_passthrough_check.setChecked(False)
         self._overlay_passthrough_check.stateChanged.connect(
@@ -172,7 +248,7 @@ class Sidebar(QWidget):
         return section
 
     def _build_data_section(self):
-        section = CollapsibleSection("数据", expanded=False)
+        section = SidebarSection("数据")
 
         update_row = QHBoxLayout()
         update_row.setSpacing(8)
@@ -196,23 +272,12 @@ class Sidebar(QWidget):
         self._filter_status_label = NeumorphicLabel("显示全部", level="caption")
         section.add_widget(self._filter_status_label)
 
-        plan_row = QHBoxLayout()
-        plan_row.setSpacing(8)
-        self._plan_scope = NeumorphicComboBox()
-        self._plan_scope.addItems(["全图", "框选区域"])
-        self._plan_scope.setFixedWidth(104)
-        self._plan_for_type_btn = NeumorphicButton("规划路线")
-        self._plan_for_type_btn.clicked.connect(self._on_plan_for_type)
-        plan_row.addWidget(self._plan_scope)
-        plan_row.addWidget(self._plan_for_type_btn)
-        section.add_layout(plan_row)
-
         self._data_info_label = NeumorphicLabel("暂无数据", level="caption")
         section.add_widget(self._data_info_label)
         return section
 
     def _build_settings_section(self):
-        section = CollapsibleSection("设置", expanded=False)
+        section = SidebarSection("设置")
         self._settings_btn = NeumorphicButton("打开设置")
         self._settings_btn.clicked.connect(self.settings_clicked.emit)
         section.add_widget(self._settings_btn)
@@ -236,7 +301,6 @@ class Sidebar(QWidget):
         self._stop_nav_btn.setEnabled(active)
 
     def set_nav_progress(self, value: int, text: str = ""):
-        self._nav_progress.setValue(value)
         if text:
             self._nav_info_label.setText(text)
 
@@ -247,6 +311,11 @@ class Sidebar(QWidget):
         self._overlay_check.blockSignals(True)
         self._overlay_check.setChecked(enabled)
         self._overlay_check.blockSignals(False)
+        self._overlay_passthrough_check.blockSignals(True)
+        if not enabled:
+            self._overlay_passthrough_check.setChecked(False)
+        self._overlay_passthrough_check.setEnabled(enabled)
+        self._overlay_passthrough_check.blockSignals(False)
 
     def set_route_summary(self, point_count: int, distance: float = 0.0,
                           dirty: bool = False, editing: bool = False):

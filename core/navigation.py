@@ -113,6 +113,8 @@ class Navigator:
 
     def stop(self):
         """停止导航"""
+        if self._state == NavigationState.IDLE and not self._route:
+            return
         self._state = NavigationState.IDLE
         self._route = []
         self._current_index = 0

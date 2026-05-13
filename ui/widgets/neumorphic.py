@@ -122,7 +122,7 @@ def switch_qss():
             spacing: 8px;
         }}
         QCheckBox::indicator {{
-            width: 42px;
+            width: 22px;
             height: 22px;
             border-radius: 11px;
             border: 1px solid {BORDER_DARK};
@@ -133,7 +133,7 @@ def switch_qss():
         }}
         QCheckBox::indicator:checked {{
             background-color: {ACCENT};
-            border-color: {ACCENT};
+            border: 1px solid {ACCENT_DARK};
         }}
         QCheckBox::indicator:disabled {{
             background-color: {BORDER};
@@ -202,6 +202,7 @@ def menu_qss():
             border: 1px solid {SHADOW_DARK};
             border-radius: {RADIUS_SM}px;
             padding: 4px;
+            margin: 1px;
             {font_qss()}
         }}
         QMenu::item {{
@@ -218,6 +219,32 @@ def menu_qss():
             margin: 4px 8px;
         }}
     """
+
+
+def prepare_rounded_popup(widget):
+    """Let native popup widgets show QSS rounded corners without hard mask jaggies."""
+    if not widget:
+        return
+    widget.setWindowFlags(
+        widget.windowFlags() | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint
+    )
+    widget.clearMask()
+    widget.setAttribute(Qt.WA_TranslucentBackground, True)
+    widget.setAttribute(Qt.WA_NoSystemBackground, True)
+    widget.setAutoFillBackground(False)
+
+
+def prepare_combo_popup_window(widget):
+    """Use an opaque native combo popup to avoid transparent-window shadow artifacts."""
+    if not widget:
+        return
+    widget.clearMask()
+    widget.setAttribute(Qt.WA_TranslucentBackground, False)
+    widget.setAttribute(Qt.WA_NoSystemBackground, False)
+    widget.setAutoFillBackground(True)
+    palette = widget.palette()
+    palette.setColor(widget.backgroundRole(), QColor(BG_SECONDARY))
+    widget.setPalette(palette)
 
 
 def apply_shadow(widget, blur=16, offset_x=6, offset_y=6, color=SHADOW_DARK):
@@ -426,25 +453,26 @@ class NeumorphicComboBox(QComboBox):
         super().__init__(parent)
         self.setCursor(Qt.PointingHandCursor)
         self.setMinimumHeight(38)
-        self._popup_styled = False
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WA_NoSystemBackground, True)
+        self.setAttribute(Qt.WA_StyledBackground, False)
+        self.setAutoFillBackground(False)
         self.setStyleSheet(f"""
             QComboBox {{
-                background-color: {BG_PRIMARY};
+                background-color: transparent;
                 color: {TEXT_PRIMARY};
-                border: 1px solid {BORDER};
-                border-radius: {RADIUS_SM}px;
+                border: none;
                 padding: 6px 32px 6px 12px;
                 {font_qss()}
             }}
             QComboBox:hover {{
-                background-color: {BG_CARD};
-                border-color: {BORDER_DARK};
+                background-color: transparent;
             }}
             QComboBox:focus {{
-                border-color: {ACCENT};
+                background-color: transparent;
             }}
             QComboBox::drop-down {{
-                subcontrol-origin: padding;
+                subcontrol-origin: border;
                 subcontrol-position: center right;
                 width: 28px;
                 border: none;
@@ -459,12 +487,16 @@ class NeumorphicComboBox(QComboBox):
                 background-color: {BG_SECONDARY};
                 color: {TEXT_PRIMARY};
                 border: 1px solid {SHADOW_DARK};
-                border-radius: {RADIUS_SM}px;
+                border-radius: 0px;
                 padding: 4px;
                 selection-background-color: {ACCENT};
                 selection-color: #ffffff;
                 outline: none;
                 {font_qss()}
+            }}
+            QComboBox QAbstractItemView::corner {{
+                background-color: {BG_SECONDARY};
+                border: none;
             }}
             QComboBox QAbstractItemView::item {{
                 padding: 6px 12px;
@@ -476,14 +508,23 @@ class NeumorphicComboBox(QComboBox):
             }}
             QComboBox:disabled {{
                 color: {TEXT_DISABLED};
-                border-color: #e2e6ea;
             }}
         """)
 
     def paintEvent(self, event):
-        super().paintEvent(event)
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
+
+        bg = QColor(BG_CARD if self.underMouse() else BG_PRIMARY)
+        border = QColor(ACCENT if self.hasFocus() else BORDER)
+        painter.setPen(border)
+        painter.setBrush(bg)
+        painter.drawRoundedRect(self.rect().adjusted(0, 0, -1, -1), RADIUS_SM, RADIUS_SM)
+
+        painter.setPen(QColor(TEXT_DISABLED if not self.isEnabled() else TEXT_PRIMARY))
+        text_rect = self.rect().adjusted(12, 0, -34, 0)
+        painter.drawText(text_rect, Qt.AlignVCenter | Qt.AlignLeft, self.currentText())
+
         arrow_x = self.width() - 20
         arrow_y = self.height() // 2 - 2
         color = QColor(ACCENT) if self.hasFocus() else QColor(TEXT_SECONDARY)
@@ -496,19 +537,23 @@ class NeumorphicComboBox(QComboBox):
         triangle.closeSubpath()
         painter.drawPath(triangle)
 
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.clearMask()
+
     def showPopup(self):
         super().showPopup()
-        if not self._popup_styled:
-            view = self.view()
-            if view:
-                win = view.window()
-                if win and win is not self:
-                    win.setWindowFlags(
-                        win.windowFlags() | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint
-                    )
-                    win.setAttribute(Qt.WA_TranslucentBackground, True)
-                    self._popup_styled = True
-                    super().showPopup()
+        view = self.view()
+        if not view:
+            return
+
+        view.setAutoFillBackground(False)
+        view.viewport().setAutoFillBackground(False)
+        view.setFrameShape(QFrame.NoFrame)
+
+        win = view.window()
+        if win and win is not self:
+            prepare_combo_popup_window(win)
 
 
 class NeumorphicSwitch(QCheckBox):
@@ -525,14 +570,12 @@ class NeumorphicSeparator(QFrame):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFrameShape(QFrame.HLine)
-        self.setFixedHeight(2)
+        self.setFrameShape(QFrame.NoFrame)
+        self.setFixedHeight(1)
         self.setStyleSheet(f"""
             QFrame {{
-                background-color: transparent;
+                background-color: {BORDER};
                 border: none;
-                border-top: 1px solid {SHADOW_DARK};
-                border-bottom: 1px solid {SHADOW_LIGHT};
             }}
         """)
 

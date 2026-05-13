@@ -6,13 +6,14 @@ bwiki 同款分类，支持多选，过滤无效（0点位）的分类。
 
 import logging
 from PyQt5.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QLabel,
+    QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QCheckBox, QScrollArea, QWidget,
     QFrame, QGridLayout
 )
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QFont
 
+from .frameless_dialog import FramelessRoundedDialog
 from ..widgets.neumorphic import (
     NeumorphicButton, NeumorphicLabel, NeumorphicSeparator,
     BG_PRIMARY, BG_SECONDARY, BG_CARD, TEXT_PRIMARY,
@@ -23,7 +24,7 @@ from ..widgets.neumorphic import (
 logger = logging.getLogger(__name__)
 
 
-class FilterDialog(QDialog):
+class FilterDialog(FramelessRoundedDialog):
     """点位筛选对话框"""
 
     filter_applied = pyqtSignal(object)  # emits set of selected mark_type_names
@@ -37,12 +38,12 @@ class FilterDialog(QDialog):
             current_selection: currently selected mark_type_names
             parent: parent widget
         """
-        super().__init__(parent)
+        super().__init__(BG_SECONDARY, parent=parent)
         self.setWindowTitle("点位筛选")
         self.setFixedSize(500, 600)
         self.setStyleSheet(f"""
             QDialog {{
-                background-color: {BG_SECONDARY};
+                background-color: transparent;
             }}
         """)
 
@@ -66,14 +67,11 @@ class FilterDialog(QDialog):
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(12)
 
-        # Title
         title = NeumorphicLabel("点位筛选", level="title")
         layout.addWidget(title)
-
-        layout.addWidget(NeumorphicSeparator())
 
         # Top buttons: select all / deselect all
         top_row = QHBoxLayout()

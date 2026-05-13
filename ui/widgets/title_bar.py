@@ -5,17 +5,66 @@
 新拟物派设计风格。
 """
 
-from PyQt5.QtWidgets import (
-    QWidget, QHBoxLayout, QLabel, QPushButton,
-    QGraphicsDropShadowEffect, QSizePolicy
-)
+from PyQt5.QtWidgets import QWidget, QHBoxLayout, QLabel, QPushButton
 from PyQt5.QtCore import Qt, QPoint
-from PyQt5.QtGui import QColor, QFont, QMouseEvent
+from PyQt5.QtGui import QColor, QMouseEvent, QPainter, QPen
 
 from .neumorphic import (
     BG_SECONDARY, BG_PRIMARY, TEXT_PRIMARY, TEXT_SECONDARY,
-    ACCENT, ERROR, apply_shadow
+    ERROR
 )
+
+
+class WindowControlButton(QPushButton):
+    """绘制式窗口控制按钮，避免依赖字体符号。"""
+
+    def __init__(self, icon_name: str, parent=None, is_close: bool = False):
+        super().__init__(parent)
+        self._icon_name = icon_name
+        self._is_close = is_close
+        self.setFixedSize(34, 30)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFocusPolicy(Qt.NoFocus)
+        self.setStyleSheet(f"""
+            QPushButton {{
+                background-color: transparent;
+                border: none;
+                border-radius: 8px;
+            }}
+            QPushButton:hover {{
+                background-color: {"#fee2e2" if is_close else BG_PRIMARY};
+            }}
+            QPushButton:pressed {{
+                background-color: {"#fecaca" if is_close else "#d8dce3"};
+            }}
+        """)
+
+    def set_icon_name(self, icon_name: str):
+        self._icon_name = icon_name
+        self.update()
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        color = QColor(ERROR if self._is_close and self.underMouse() else TEXT_PRIMARY)
+        pen = QPen(color, 1.7)
+        pen.setCapStyle(Qt.RoundCap)
+        pen.setJoinStyle(Qt.RoundJoin)
+        painter.setPen(pen)
+
+        cx = self.width() / 2
+        cy = self.height() / 2
+        if self._icon_name == "minimize":
+            painter.drawLine(int(cx - 5), int(cy + 4), int(cx + 5), int(cy + 4))
+        elif self._icon_name == "maximize":
+            painter.drawRect(int(cx - 5), int(cy - 5), 10, 10)
+        elif self._icon_name == "restore":
+            painter.drawRect(int(cx - 3), int(cy - 6), 9, 9)
+            painter.drawRect(int(cx - 6), int(cy - 3), 9, 9)
+        elif self._icon_name == "close":
+            painter.drawLine(int(cx - 5), int(cy - 5), int(cx + 5), int(cy + 5))
+            painter.drawLine(int(cx + 5), int(cy - 5), int(cx - 5), int(cy + 5))
 
 
 class TitleBar(QWidget):
@@ -73,9 +122,12 @@ class TitleBar(QWidget):
         layout.addWidget(self._status_label)
 
         # 窗口控制按钮
-        self._min_btn = self._create_control_button("\u2212")  # minus sign
-        self._max_btn = self._create_control_button("\u25a1")  # square
-        self._close_btn = self._create_control_button("\u00d7", is_close=True)  # ×
+        self._min_btn = self._create_control_button("minimize")
+        self._max_btn = self._create_control_button("maximize")
+        self._close_btn = self._create_control_button("close", is_close=True)
+        self._min_btn.setToolTip("最小化")
+        self._max_btn.setToolTip("最大化")
+        self._close_btn.setToolTip("关闭")
 
         self._min_btn.clicked.connect(self._on_minimize)
         self._max_btn.clicked.connect(self._on_maximize)
@@ -85,29 +137,8 @@ class TitleBar(QWidget):
         layout.addWidget(self._max_btn)
         layout.addWidget(self._close_btn)
 
-    def _create_control_button(self, text, is_close=False):
-        btn = QPushButton(text)
-        btn.setFixedSize(32, 32)
-        btn.setCursor(Qt.PointingHandCursor)
-        
-        hover_bg = "#fecaca" if is_close else BG_PRIMARY
-        hover_color = ERROR if is_close else TEXT_PRIMARY
-        
-        btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {BG_SECONDARY};
-                color: {TEXT_PRIMARY};
-                border: none;
-                border-radius: 16px;
-                font-size: 16px;
-                font-weight: 400;
-            }}
-            QPushButton:hover {{
-                background-color: {hover_bg};
-                color: {hover_color};
-            }}
-        """)
-        return btn
+    def _create_control_button(self, icon_name, is_close=False):
+        return WindowControlButton(icon_name, self, is_close=is_close)
 
     def set_status_text(self, text: str):
         self._status_label.setText(text)
@@ -147,10 +178,12 @@ class TitleBar(QWidget):
         if self._parent_window:
             if self._parent_window.isMaximized():
                 self._parent_window.showNormal()
-                self._max_btn.setText("\u25a1")
+                self._max_btn.set_icon_name("maximize")
+                self._max_btn.setToolTip("最大化")
             else:
                 self._parent_window.showMaximized()
-                self._max_btn.setText("\u25a3")
+                self._max_btn.set_icon_name("restore")
+                self._max_btn.setToolTip("还原")
 
     def _on_close(self):
         if self._parent_window:

@@ -19,7 +19,7 @@ from typing import Optional, List, Tuple
 
 from PyQt5.QtWidgets import QWidget, QApplication, QMenu, QAction
 from PyQt5.QtCore import (
-    Qt, QPointF, QRectF, QRect, QTimer, QPoint, pyqtSignal
+    Qt, QPointF, QRectF, QRect, QTimer, QPoint, QObject, QEvent, pyqtSignal
 )
 from PyQt5.QtGui import (
     QPainter, QPen, QBrush, QColor, QFont, QPainterPath,
@@ -30,12 +30,21 @@ from PyQt5.QtGui import (
 from .widgets.neumorphic import (
     BG_PRIMARY, BG_SECONDARY, TEXT_PRIMARY, TEXT_SECONDARY,
     ACCENT, SUCCESS, ERROR, SHADOW_DARK, SHADOW_LIGHT,
-    menu_qss
+    prepare_rounded_popup, menu_qss
 )
 
 logger = logging.getLogger(__name__)
 
 UI_FONT = "Microsoft YaHei UI"
+
+
+class _RoundedMenuFilter(QObject):
+    """Prepare QMenu popup windows for QSS rounded corners."""
+
+    def eventFilter(self, obj, event):
+        if isinstance(obj, QMenu) and event.type() in (QEvent.Show, QEvent.Resize):
+            prepare_rounded_popup(obj)
+        return super().eventFilter(obj, event)
 
 
 class OverlayHUD(QWidget):
@@ -86,6 +95,7 @@ class OverlayHUD(QWidget):
         self.setMinimumSize(180, 200)
         self.setMaximumSize(800, 800)
         self.resize(w, h)
+        self._menu_filter = _RoundedMenuFilter(self)
 
         # 布局参数 (根据尺寸自适应)
         self._padding = 10
@@ -663,6 +673,9 @@ class OverlayHUD(QWidget):
 
     def set_passthrough_locked(self, enabled: bool):
         """设置穿透锁定状态（合并 lock + passthrough）"""
+        if self._passthrough == enabled and self._locked == enabled:
+            return
+        was_visible = self.isVisible()
         if enabled:
             self._locked = True
             self._passthrough = True
@@ -671,7 +684,8 @@ class OverlayHUD(QWidget):
             self._locked = False
             self._passthrough = False
             self.setWindowFlags(self.windowFlags() & ~Qt.WindowTransparentForInput)
-        self.show()
+        if was_visible:
+            self.show()
 
     def mousePressEvent(self, event: QMouseEvent):
         if event.button() == Qt.LeftButton and not self._locked:
@@ -749,9 +763,14 @@ class OverlayHUD(QWidget):
     def _show_context_menu(self, pos):
         menu = QMenu(self)
         menu.setStyleSheet(menu_qss())
+        prepare_rounded_popup(menu)
+        menu.installEventFilter(self._menu_filter)
 
         # 预设大小
         size_menu = menu.addMenu("预设大小")
+        size_menu.setStyleSheet(menu_qss())
+        prepare_rounded_popup(size_menu)
+        size_menu.installEventFilter(self._menu_filter)
         for name, (w, h) in self.SIZES.items():
             a = size_menu.addAction(f"{name} ({w}x{h})")
             a.triggered.connect(lambda checked, s=name: self._resize_to(s))
@@ -765,6 +784,9 @@ class OverlayHUD(QWidget):
 
         # 形状子菜单
         shape_menu = menu.addMenu("形状")
+        shape_menu.setStyleSheet(menu_qss())
+        prepare_rounded_popup(shape_menu)
+        shape_menu.installEventFilter(self._menu_filter)
         shapes = [
             ("圆角矩形 (完整)", "rounded_rect"),
             ("圆形 (纯地图)", "circle"),
@@ -781,6 +803,9 @@ class OverlayHUD(QWidget):
 
         # 地图缩放
         zoom_menu = menu.addMenu("地图缩放")
+        zoom_menu.setStyleSheet(menu_qss())
+        prepare_rounded_popup(zoom_menu)
+        zoom_menu.installEventFilter(self._menu_filter)
         for name, crop_val in [("极近 (150)", 150), ("近 (250)", 250), ("中 (350)", 350),
                                 ("远 (500)", 500), ("极远 (750)", 750)]:
             a = zoom_menu.addAction(name)

@@ -13,7 +13,7 @@ from typing import Optional
 from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QMessageBox, QFileDialog, QInputDialog,
-    QApplication, QSizePolicy, QFrame
+    QApplication, QSizePolicy, QFrame, QStackedWidget
 )
 from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal, QRectF, QProcess
 from PyQt5.QtGui import QColor, QResizeEvent, QPainter, QPainterPath
@@ -326,9 +326,18 @@ class MainWindow(QMainWindow):
         content_layout.setContentsMargins(12, 8, 12, 8)
         content_layout.setSpacing(12)
 
+        self._side_stack = QStackedWidget()
+        self._side_stack.setFixedWidth(270)
+        self._side_stack.setStyleSheet("QStackedWidget { background: transparent; }")
+
         self._sidebar = Sidebar()
         self._connect_sidebar_signals()
-        content_layout.addWidget(self._sidebar)
+        self._side_stack.addWidget(self._sidebar)
+
+        self._route_drawer = RouteDrawer()
+        self._connect_route_drawer_signals()
+        self._side_stack.addWidget(self._route_drawer)
+        content_layout.addWidget(self._side_stack)
 
         self._map_canvas = MapCanvas()
         self._map_canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -337,11 +346,6 @@ class MainWindow(QMainWindow):
         self._map_canvas.waypoint_skip_requested.connect(self._on_waypoint_skip_requested)
         self._map_canvas.route_points_changed.connect(self._on_route_points_changed)
         content_layout.addWidget(self._map_canvas, stretch=1)
-
-        self._route_drawer = RouteDrawer()
-        self._connect_route_drawer_signals()
-        self._route_drawer.hide()
-        content_layout.addWidget(self._route_drawer)
 
         main_layout.addWidget(content, stretch=1)
 
@@ -377,10 +381,21 @@ class MainWindow(QMainWindow):
         self._route_drawer.route_import_clicked.connect(self._on_route_import)
         self._route_drawer.route_export_current_clicked.connect(self._on_route_export_current)
         self._route_drawer.route_export_all_clicked.connect(self._on_route_export_all)
-        self._route_drawer.closed.connect(lambda: None)
+        self._route_drawer.closed.connect(self._show_main_sidebar)
 
     def _toggle_route_drawer(self):
-        self._route_drawer.setVisible(not self._route_drawer.isVisible())
+        if self._side_stack.currentWidget() is self._route_drawer:
+            self._show_main_sidebar()
+        else:
+            self._show_route_library()
+
+    def _show_route_library(self):
+        self._refresh_route_library()
+        self._update_route_info()
+        self._side_stack.setCurrentWidget(self._route_drawer)
+
+    def _show_main_sidebar(self):
+        self._side_stack.setCurrentWidget(self._sidebar)
 
     # ==================== Tracking ====================
 
@@ -625,11 +640,14 @@ class MainWindow(QMainWindow):
 
     def _on_stop_nav(self):
         """停止导航"""
+        if not self._navigator.is_active:
+            self._sidebar.set_nav_active(False)
+            self._sidebar.set_nav_progress(0, "导航未启动")
+            return
         self._navigator.stop()
         self._title_bar.set_status("tracking" if self._tracker.is_running else "idle")
         self._title_bar.set_status_text("追踪中" if self._tracker.is_running else "")
         self._sidebar.set_nav_progress(0, "导航已停止")
-        logger.info("Navigation stopped")
 
     def _on_target_reached(self, index: int, target):
         logger.info("Target %d reached: (%.0f, %.0f)", index, target[0], target[1])
@@ -687,7 +705,8 @@ class MainWindow(QMainWindow):
 
     def _on_route_points_changed(self, _points):
         self._route_dirty = True
-        self._navigator.stop()
+        if self._navigator.is_active:
+            self._navigator.stop()
         self._update_route_info()
 
     def _on_route_selected_changed(self, route_id):
@@ -709,7 +728,8 @@ class MainWindow(QMainWindow):
         self._route_dirty = False
         self._route_editing = False
         self._route_snapshot = []
-        self._navigator.stop()
+        if self._navigator.is_active:
+            self._navigator.stop()
         self._map_canvas.finish_route_editing()
         self._map_canvas.set_route(route.points)
         self._route_drawer.set_current_route_id(route.id)
@@ -721,23 +741,27 @@ class MainWindow(QMainWindow):
             return
         self._route_dirty = False
         self._route_editing = True
-        self._navigator.stop()
+        if self._navigator.is_active:
+            self._navigator.stop()
         current_points = self._current_route_points()
         if current_points:
             self._route_snapshot = list(current_points)
             self._map_canvas.start_route_editing()
-            self._sidebar.set_nav_progress(0, "路线编辑: 拖动点，点击线段插入，Delete 删除")
+            self._route_drawer.set_draw_hint("编辑中: 拖动点调整路线，点击线段插入点，Delete 删除选中的点。")
+            self._sidebar.set_nav_progress(0, "正在编辑路线")
         else:
             self._current_route_id = ""
             self._route_snapshot = []
             self._route_drawer.set_current_route_id("")
             self._map_canvas.start_route_drawing(clear=True)
-            self._sidebar.set_nav_progress(0, "手工绘制: 左键逐点添加路线")
+            self._route_drawer.set_draw_hint("绘制中: 在地图上左键逐点添加路线，至少添加 2 个点后可完成并保存。")
+            self._sidebar.set_nav_progress(0, "正在绘制路线")
         self._update_route_info()
 
     def _on_route_finish(self):
         self._route_editing = False
         self._map_canvas.finish_route_editing()
+        self._route_drawer.set_draw_hint("路线编辑已完成，可保存到路线库，或返回侧边栏开始导航。")
         self._sidebar.set_nav_progress(0, "路线编辑已完成，可保存或开始导航")
         self._update_route_info()
 
@@ -751,6 +775,7 @@ class MainWindow(QMainWindow):
         elif not self._current_route_id:
             self._map_canvas.clear_route()
             self._route_dirty = False
+        self._route_drawer.set_draw_hint("已取消编辑。点击“绘制 / 编辑”可重新开始。")
         self._sidebar.set_nav_progress(0, "已取消路线编辑")
         self._update_route_info()
 
@@ -793,6 +818,7 @@ class MainWindow(QMainWindow):
         self._map_canvas.finish_route_editing()
         self._refresh_route_library()
         self._route_drawer.set_current_route_id(self._current_route_id)
+        self._route_drawer.set_draw_hint("路线已保存。可以继续编辑、加载其他路线，或返回侧边栏开始导航。")
         self._sidebar.set_nav_progress(0, f"已保存路线: {route.name}")
         self._update_route_info()
 
@@ -1186,7 +1212,9 @@ class MainWindow(QMainWindow):
         if enabled:
             self._overlay_hud.show()
         else:
+            self._overlay_hud.set_passthrough_locked(False)
             self._overlay_hud.hide()
+        self._sidebar.set_overlay_enabled(enabled)
         self._settings.set("ui.overlay_enabled", enabled)
 
     def _on_overlay_closed(self):
@@ -1194,6 +1222,9 @@ class MainWindow(QMainWindow):
         self._settings.set("ui.overlay_enabled", False)
 
     def _on_toggle_overlay_passthrough(self, enabled: bool):
+        if not self._settings.get("ui.overlay_enabled", True) or not self._overlay_hud.isVisible():
+            self._sidebar.set_overlay_enabled(False)
+            return
         self._overlay_hud.set_passthrough_locked(enabled)
 
     def _on_hud_crop_size_changed(self, size: int):
