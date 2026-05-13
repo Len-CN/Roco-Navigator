@@ -28,17 +28,16 @@ logs/
 *.log
 
 # Build
-build/*
-!build/
-!build/roco_navigator.spec
-!build/pyinstaller_entry.py
+build/
 dist/
 *.egg-info/
 *.egg
 
 # Release packaging
 *.spec
-!build/roco_navigator.spec
+installer/
+scripts/
+docs/
 installer/output/
 release/
 *.msi
@@ -62,6 +61,8 @@ __pycache__/
 
 # Claude Code
 .claude/
+AGENTS.md
+CLAUDE.md
 
 # Backup files
 *.bak

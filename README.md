@@ -59,27 +59,6 @@ python main.py
 python -m roco_navigator.main
 ```
 
-### 从源码构建安装包
-
-构建安装包需要额外安装 [Inno Setup 6](https://jrsoftware.org/isinfo.php)。执行：
-
-```powershell
-.\scripts\build_release.ps1
-```
-
-脚本会依次运行语法检查、单元测试、安装 `pyinstaller`、生成 `dist\RocoNavigator\`，并在检测到 Inno Setup 后生成安装包：
-
-```text
-installer\output\RocoNavigator-3.0.0-Setup.exe
-release\RocoNavigator-3.0.0-Portable.zip
-```
-
-如只想快速构建，可跳过测试：
-
-```powershell
-.\scripts\build_release.ps1 -SkipTests
-```
-
 ### 使用流程
 
 1. 点击“更新地图”，下载并拼接世界地图瓦片。
@@ -128,7 +107,7 @@ release\RocoNavigator-3.0.0-Portable.zip
 - **路线**：方向扫描算法配合 2-opt 优化，有 OR-Tools 时可使用求解器。
 - **坐标系**：基于 Bilibili WIKI Leaflet CRS.Simple，zoom 7 地图尺寸为 6144 x 5120。
 
-## 开发验证
+## 源码验证
 
 运行现有单测：
 
