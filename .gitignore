@@ -24,7 +24,8 @@ Thumbs.db
 desktop.ini
 
 # Logs
-logs/*.log
+logs/
+*.log
 
 # Build
 build/
@@ -35,6 +36,9 @@ dist/
 # Cache
 .cache/
 *.pyc
+__pycache__/
+.pytest_cache/
+.mypy_cache/
 
 # GPU specific
 *.cubin
@@ -47,13 +51,15 @@ dist/
 *.bak
 *.tmp
 
-# Large assets (runtime downloaded)
-assets/maps/*.png
-assets/icons/wiki/*.png
+# Runtime-downloaded assets
+assets/maps/
+assets/icons/wiki/
 
-# User config (contains calibration data, not portable)
+# Local runtime data (not portable)
 data_files/config.json
-
-# Runtime cache
+data_files/resources.json
+data_files/routes.json
+data_files/arrow_template.npz
 data_files/wiki_cache.json
 data_files/cache/
+data_files/*.bak

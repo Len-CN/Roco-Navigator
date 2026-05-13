@@ -56,9 +56,9 @@ python -c "import ast; ast.parse(open('main.py', encoding='utf-8').read())"
 
 ## 当前测试情况
 
-- `tests/` 目录存在，但目前基本为空。
-- 没有自动化测试、CI/CD 或 linter 配置。
-- 修改后至少应做 Python 语法检查；涉及 UI/视觉功能时需要人工启动程序验证。
+- `tests/test_route_manager.py` 覆盖路线保存、旧格式加载、导入冲突和导出再导入。
+- 当前没有 CI/CD 或 linter 配置。
+- 修改后至少应运行现有单测和 Python 语法检查；涉及 UI/视觉功能时需要人工启动程序验证。
 
 ## 目录结构
 
@@ -103,12 +103,12 @@ roco_navigator/
 │   ├── maps/               # WIKI 下载拼接后的地图图片
 │   └── icons/wiki/         # WIKI 点位图标缓存
 ├── data_files/
-│   ├── config.json         # 用户配置，首次运行由默认值生成
-│   ├── resources.json      # 本地资源点数据
-│   ├── routes.json         # 本地路线数据
-│   ├── wiki_cache.json     # WIKI 点位与标记类型缓存
-│   ├── arrow_template.npz  # 箭头检测模板
-│   └── cache/              # LightGlue/DISK 等特征缓存
+│   ├── config.json         # 用户配置，本地生成，不追踪
+│   ├── resources.json      # 本地资源点数据，不追踪
+│   ├── routes.json         # 本地路线数据，不追踪
+│   ├── wiki_cache.json     # WIKI 点位与标记类型缓存，不追踪
+│   ├── arrow_template.npz  # 箭头检测模板，不追踪
+│   └── cache/              # LightGlue/DISK 等特征缓存，不追踪
 └── logs/                   # 运行日志
 ```
 
@@ -388,17 +388,21 @@ settings.set("navigation.arrival_distance", 20)
 
 ## 数据文件和缓存
 
-当前仓库已有重要本地数据：
+仓库只追踪代码、文档、启动脚本和测试。以下内容属于本机运行数据、用户数据、下载资源或缓存，默认不纳入 Git：
 
 - `assets/maps/world_map_z6.png`
 - `assets/maps/world_map_z7.png`
 - `assets/icons/wiki/*.png`
+- `data_files/resources.json`
+- `data_files/routes.json`
+- `data_files/arrow_template.npz`
 - `data_files/wiki_cache.json`
 - `data_files/cache/disk_features_*.npz`
 - `data_files/config.json`
 
 注意：
 
+- 这些文件缺失时，应通过程序内更新地图/点位、首次运行配置生成或正常使用流程重新生成。
 - `wiki_cache.json` 可能经常随更新变化。
 - `data_files/cache/` 里的特征缓存体积较大。
 - 修改代码时不要无故删除用户已有地图、图标、缓存或配置。
@@ -429,23 +433,25 @@ settings.set("navigation.arrival_distance", 20)
 1. 基础语法检查：
 
    ```bat
-   python -m compileall .
+   python -m compileall main.py config core data ui utils vision tests
    ```
 
-2. 入口导入检查：
+2. 单元测试：
+
+   ```bat
+   python -m unittest discover -s tests -v
+   ```
+
+3. 入口导入检查：
 
    ```bat
    python -c "import main"
    ```
 
-3. UI 或追踪相关改动：
+4. UI 或追踪相关改动：
 
    ```bat
    python main.py
    ```
 
-4. WIKI 更新、依赖安装、地图下载等涉及网络或环境的功能，需要在真实 Windows 环境中人工验证。
-
-## 当前 git 状态提示
-
-通读仓库时发现 `data_files/wiki_cache.json` 已经是修改状态。这个文件属于数据缓存，除非任务明确要求，不要回滚或覆盖用户已有更改。
+5. WIKI 更新、依赖安装、地图下载等涉及网络或环境的功能，需要在真实 Windows 环境中人工验证。
