@@ -11,6 +11,8 @@ $Spec = Join-Path $Root "build\roco_navigator.spec"
 $DistDir = Join-Path $Root "dist"
 $AppDist = Join-Path $DistDir "RocoNavigator"
 $InstallerScript = Join-Path $Root "installer\roco_navigator.iss"
+$ReleaseDir = Join-Path $Root "release"
+$PortableZip = Join-Path $ReleaseDir "RocoNavigator-$Version-Portable.zip"
 
 Set-Location $Root
 
@@ -39,6 +41,15 @@ if (-not (Test-Path (Join-Path $AppDist "RocoNavigator.exe"))) {
     throw "PyInstaller did not produce dist\RocoNavigator\RocoNavigator.exe"
 }
 
+Write-Host "== Building portable zip =="
+if (-not (Test-Path $ReleaseDir)) {
+    New-Item -ItemType Directory -Path $ReleaseDir | Out-Null
+}
+if (Test-Path $PortableZip) {
+    Remove-Item -LiteralPath $PortableZip -Force
+}
+Compress-Archive -Path (Join-Path $AppDist "*") -DestinationPath $PortableZip -Force
+
 if (-not $InnoSetupCompiler) {
     $Candidates = @(
         "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
@@ -61,4 +72,5 @@ if ($InnoSetupCompiler -and (Test-Path $InnoSetupCompiler)) {
 
 Write-Host "== Done =="
 Write-Host "App distribution: $AppDist"
+Write-Host "Portable zip: $PortableZip"
 Write-Host "Installer output: $(Join-Path $Root 'installer\output')"

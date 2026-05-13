@@ -14,7 +14,7 @@
 .\scripts\build_release.ps1
 ```
 
-仅构建安装包、跳过测试：
+仅构建发布产物、跳过测试：
 
 ```powershell
 .\scripts\build_release.ps1 -SkipTests
@@ -30,6 +30,8 @@ python -m unittest discover -s tests -v
 ## 干净机器验证
 
 - 无 Python 环境也能启动 `RocoNavigator.exe`。
+- `installer/output/RocoNavigator-3.0.0-Setup.exe` 已生成。
+- `release/RocoNavigator-3.0.0-Portable.zip` 已生成，且包含 `RocoNavigator.exe`。
 - 程序版本显示为 `3.0.0`。
 - 用户配置、路线、日志、缓存写入 `%LOCALAPPDATA%\RocoNavigator\`。
 - WIKI 地图和点位更新正常。

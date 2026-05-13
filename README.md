@@ -71,6 +71,7 @@ python -m roco_navigator.main
 
 ```text
 installer\output\RocoNavigator-3.0.0-Setup.exe
+release\RocoNavigator-3.0.0-Portable.zip
 ```
 
 如只想快速构建，可跳过测试：
