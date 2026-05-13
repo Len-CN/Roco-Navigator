@@ -186,10 +186,18 @@ class ResourceManager:
             self._mark_type_names.add(resource.mark_type_name)
         return True
 
+    def _rebuild_indexes(self):
+        """重建类型索引，确保更新/删除后筛选项与资源列表一致。"""
+        self._types = {r.type for r in self._resources}
+        self._mark_type_names = {
+            r.mark_type_name for r in self._resources if r.mark_type_name
+        }
+
     def update(self, resource: Resource) -> bool:
         for i, r in enumerate(self._resources):
             if r.id == resource.id:
                 self._resources[i] = resource
+                self._rebuild_indexes()
                 return True
         return False
 
@@ -197,6 +205,7 @@ class ResourceManager:
         for i, r in enumerate(self._resources):
             if r.id == resource_id:
                 self._resources.pop(i)
+                self._rebuild_indexes()
                 return True
         return False
 

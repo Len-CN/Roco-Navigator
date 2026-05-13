@@ -413,21 +413,21 @@ class MapCanvas(QWidget):
         painter.restore()
 
     def _draw_route_endpoints(self, painter: QPainter):
-        """起点/终点圆环 — 在玩家箭头之上层绘制，确保可见。"""
+        """起点/终点标记 — 在玩家箭头之上层绘制，确保可见。"""
         n = len(self._route_points)
         if n < 1:
             return
         is_loop = (n >= 2 and self._route_points[0] == self._route_points[-1])
 
         painter.save()
-        # 起点 — 绿色光环（中空），玩家箭头从中露出
+        # 起点 — 青色实心点，与终点样式保持一致。
         sp = self.world_to_screen(self._route_points[0].x(),
                                   self._route_points[0].y())
-        painter.setPen(QPen(QColor("#48bb78"), 3))
-        painter.setBrush(Qt.NoBrush)
-        painter.drawEllipse(sp, 11, 11)
+        painter.setBrush(QColor("#00bcd4"))
+        painter.setPen(QPen(QColor("#ffffff"), 2))
+        painter.drawEllipse(sp, 7, 7)
         if is_loop:
-            # 环形：内嵌红心提示此处亦为终点
+            # 环形：红色内点提示此处亦为终点。
             painter.setBrush(QColor("#e53e3e"))
             painter.setPen(QPen(QColor("#ffffff"), 1.5))
             painter.drawEllipse(sp, 4, 4)
@@ -452,7 +452,7 @@ class MapCanvas(QWidget):
             p1 = self.world_to_screen(self._route_points[i].x(), self._route_points[i].y())
             p2 = self.world_to_screen(self._route_points[i + 1].x(), self._route_points[i + 1].y())
 
-            visited = (i + 1 <= self._current_target_index or
+            visited = (i + 1 < self._current_target_index or
                        (i + 1) in self._visited_indices)
             is_teleport = i in self._teleport_segments
             width = max(2, int(2 / self._zoom))

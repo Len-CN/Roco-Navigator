@@ -538,6 +538,15 @@ class MainWindow(QMainWindow):
         teleport_cost = float(self._settings.get("navigation.teleport_cost_px", 150))
         return hubs, end, teleport_cost
 
+    @staticmethod
+    def _route_start_and_targets(tracker_position, resources):
+        """计算路线起点和目标列表，避免 fallback 起点重复作为目标。"""
+        if not resources:
+            return None, []
+        if tracker_position is not None:
+            return tracker_position, resources
+        return (resources[0]["x"], resources[0]["y"]), resources[1:]
+
     def _on_plan_route_for_type(self, selected_names):
         """为选中类型的资源规划路线 - selected_names is a set of mark_type_name strings"""
         if selected_names:
@@ -549,13 +558,6 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "提示", "当前筛选条件下没有资源点。")
             return
 
-        max_points = self._settings.get("navigation.max_route_points", 500)
-        if len(resources) > max_points:
-            QMessageBox.information(self, "提示",
-                                    f"当前筛选有 {len(resources)} 个点位，超过上限 {max_points}。\n"
-                                    "请选择具体的资源类型，或在设置→性能中调整上限。")
-            return
-
         # 防重入：上一次规划还在跑就忽略
         if (getattr(self, "_route_worker", None) is not None
                 and self._route_worker.isRunning()):
@@ -565,7 +567,19 @@ class MainWindow(QMainWindow):
         self._sidebar.set_nav_progress(0, "正在规划路线...")
 
         # 显式计算 start，确保环形 end == start（即使 tracker 未追踪）
-        start = self._tracker.position or (resources[0]["x"], resources[0]["y"])
+        start, resources = self._route_start_and_targets(
+            self._tracker.position, resources)
+        if not resources:
+            QMessageBox.information(self, "提示", "当前筛选条件下没有可导航的目标点。")
+            self._sidebar.set_nav_progress(0, "规划取消")
+            return
+
+        max_points = self._settings.get("navigation.max_route_points", 500)
+        if len(resources) > max_points:
+            QMessageBox.information(self, "提示",
+                                    f"当前筛选有 {len(resources)} 个目标点，超过上限 {max_points}。\n"
+                                    "请选择具体的资源类型，或在设置→性能中调整上限。")
+            return
         hubs, end, teleport_cost = self._build_route_kwargs(start)
         logger.info("Plan kwargs: start=%s end=%s endpoint=%s hubs=%d cost=%s",
                     start, end, self._get_endpoint_mode(), len(hubs), teleport_cost)
@@ -625,14 +639,18 @@ class MainWindow(QMainWindow):
 
     def _on_start_nav(self):
         """开始导航"""
-        if not self._map_canvas._route_points:
-            QMessageBox.information(self, "提示", "暂无规划路线。请先规划路线。")
+        if len(self._map_canvas._route_points) < 2:
+            QMessageBox.information(self, "提示", "路线至少需要 2 个点。请先规划路线。")
             self._sidebar.set_nav_active(False)
             return
 
         route = [(p.x(), p.y()) for p in self._map_canvas._route_points]
         target_names = self._build_nav_target_names(route)
         self._navigator.start(route, target_names=target_names)
+        self._map_canvas.update_route_progress(
+            current_index=self._navigator.current_index,
+            visited=self._navigator.visited_indices,
+        )
 
         self._title_bar.set_status("active")
         self._title_bar.set_status_text("导航中")
@@ -1277,14 +1295,6 @@ class MainWindow(QMainWindow):
             self._map_canvas.clear_selected_region()
             return
 
-        max_points = self._settings.get("navigation.max_route_points", 500)
-        if len(region_resources) > max_points:
-            QMessageBox.information(self, "提示",
-                                    f"选中区域有 {len(region_resources)} 个点位，超过上限 {max_points}。\n"
-                                    "请缩小框选范围，或在设置→性能中调整上限。")
-            self._map_canvas.clear_selected_region()
-            return
-
         # 防重入
         if (getattr(self, "_route_worker", None) is not None
                 and self._route_worker.isRunning()):
@@ -1294,7 +1304,21 @@ class MainWindow(QMainWindow):
         self._sidebar.set_data_info(f"区域内 {len(region_resources)} 个点位，正在规划...")
         self._sidebar.set_nav_progress(0, "正在规划路线...")
 
-        start = self._tracker.position or (region_resources[0]["x"], region_resources[0]["y"])
+        start, region_resources = self._route_start_and_targets(
+            self._tracker.position, region_resources)
+        if not region_resources:
+            QMessageBox.information(self, "提示", "选中区域内没有可导航的目标点。")
+            self._map_canvas.clear_selected_region()
+            self._sidebar.set_nav_progress(0, "规划取消")
+            return
+
+        max_points = self._settings.get("navigation.max_route_points", 500)
+        if len(region_resources) > max_points:
+            QMessageBox.information(self, "提示",
+                                    f"选中区域有 {len(region_resources)} 个目标点，超过上限 {max_points}。\n"
+                                    "请缩小框选范围，或在设置→性能中调整上限。")
+            self._map_canvas.clear_selected_region()
+            return
         hubs, end, teleport_cost = self._build_route_kwargs(start)
         self._route_worker = RouteWorker(
             self._path_planner, start, region_resources,

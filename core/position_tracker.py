@@ -152,6 +152,7 @@ class PositionTracker:
         self._running = True
         self._lost_frames = 0
         self._prev_position = None
+        self._detector.reset()
         self._change_state(TrackingState.GLOBAL_SCAN)
         self._last_time = time.perf_counter()
         logger.info("Tracking started")
@@ -459,6 +460,11 @@ class PositionTracker:
                             (match_pos[1] - self._position[1]) ** 2) ** 0.5
                     if dist > self._config.teleport_threshold:
                         logger.warning("Teleport detected (%.0f px), re-scanning", dist)
+                        self._detector.reset()
+                        self._position = None
+                        self._prev_position = None
+                        self._smoothed_x = None
+                        self._smoothed_y = None
                         self._change_state(TrackingState.GLOBAL_SCAN)
                         return self._build_status(f"Teleport detected ({dist:.0f} px)")
 
@@ -510,6 +516,11 @@ class PositionTracker:
                         (result.position[1] - self._position[1]) ** 2) ** 0.5
                 if dist > self._config.teleport_threshold:
                     logger.warning("Teleport detected (%.0f px), re-scanning", dist)
+                    self._detector.reset()
+                    self._position = None
+                    self._prev_position = None
+                    self._smoothed_x = None
+                    self._smoothed_y = None
                     self._change_state(TrackingState.GLOBAL_SCAN)
                     return self._build_status(f"Teleport detected ({dist:.0f} px)")
 
