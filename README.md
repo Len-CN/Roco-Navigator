@@ -17,11 +17,11 @@
 
 ## 快速开始
 
-当前版本：`3.0.0`
+当前版本：`3.0.1`
 
 ### 安装版运行
 
-普通用户推荐下载 `RocoNavigator-3.0.0-Setup.exe` 安装包。安装后可通过开始菜单、桌面快捷方式或安装目录中的 `RocoNavigator.exe` 启动，不需要提前安装 Python。
+普通用户推荐下载 `RocoNavigator-3.0.1-Setup.exe` 安装包。安装后可通过开始菜单、桌面快捷方式或安装目录中的 `RocoNavigator.exe` 启动，不需要提前安装 Python。
 
 安装版会把用户数据写入：
 
@@ -75,7 +75,7 @@ python -m roco_navigator.main
 - `data_files/resources.json`
 - `data_files/routes.json`
 - `data_files/wiki_cache.json`
-- `data_files/arrow_template.npz`
+- `data_files/arrow_template.npz`（内置箭头方向模板，会随源码和安装包发布）
 - `data_files/cache/`
 - `assets/maps/`
 - `assets/icons/wiki/`

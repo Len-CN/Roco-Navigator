@@ -76,7 +76,6 @@ assets/icons/wiki/
 data_files/config.json
 data_files/resources.json
 data_files/routes.json
-data_files/arrow_template.npz
 data_files/wiki_cache.json
 data_files/cache/
 data_files/*.bak

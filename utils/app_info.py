@@ -5,7 +5,7 @@ import sys
 
 APP_NAME = "Roco Navigator"
 APP_DISPLAY_NAME = "洛克导航"
-APP_VERSION = "3.0.0"
+APP_VERSION = "3.0.1"
 APP_DATA_DIR_NAME = "RocoNavigator"
 APP_ICON_FILENAME = "RocoNavigator.ico"
 APP_SOURCE_ICON_FILENAME = "roco_navigator_icon.svg"
