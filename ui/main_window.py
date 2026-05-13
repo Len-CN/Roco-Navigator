@@ -13,9 +13,9 @@ from typing import Optional
 from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QMessageBox, QFileDialog, QInputDialog,
-    QApplication, QFileIconProvider, QSizePolicy, QFrame, QStackedWidget
+    QApplication, QSizePolicy, QFrame, QStackedWidget
 )
-from PyQt5.QtCore import QFileInfo, Qt, QTimer, QThread, pyqtSignal, QRectF, QProcess
+from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal, QRectF, QProcess
 from PyQt5.QtGui import QColor, QResizeEvent, QPainter, QPainterPath, QIcon
 
 from ..config.settings import Settings
@@ -39,8 +39,8 @@ from ..data.map_manager import MapManager
 from ..data.resource_manager import ResourceManager
 from ..data.route_manager import RouteManager, Route
 from ..data.wiki_updater import WikiUpdater
-from ..utils.file_utils import get_bundled_root, get_packages_dir, is_frozen
-from ..utils.app_info import APP_DISPLAY_NAME
+from ..utils.file_utils import get_packages_dir, is_frozen
+from ..utils.app_info import APP_DISPLAY_NAME, get_app_icon_path
 from ..utils.runtime import build_pip_command
 
 logger = logging.getLogger(__name__)
@@ -211,11 +211,8 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(self.MIN_WIDTH, self.MIN_HEIGHT)
         self.resize(1200, 800)
         self.setWindowTitle(APP_DISPLAY_NAME)
-        if is_frozen():
-            icon = QFileIconProvider().icon(QFileInfo(sys.executable))
-        else:
-            icon_path = os.path.join(get_bundled_root(), "roco_navigator_icon.svg")
-            icon = QIcon(icon_path) if os.path.exists(icon_path) else QIcon()
+        icon_path = get_app_icon_path()
+        icon = QIcon(icon_path) if os.path.exists(icon_path) else QIcon()
         if not icon.isNull():
             self.setWindowIcon(icon)
         self.setStyleSheet("QMainWindow { background: transparent; }")

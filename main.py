@@ -20,7 +20,7 @@ if _pkg_name not in sys.modules:
     importlib.import_module(_pkg_name)
 __package__ = _pkg_name
 
-from .utils.file_utils import add_user_packages_to_path, get_bundled_root, is_frozen
+from .utils.file_utils import add_user_packages_to_path
 
 add_user_packages_to_path()
 
@@ -140,10 +140,10 @@ def main():
     logger.info("配置加载完成")
     
     # 启动 PyQt5 应用
-    from PyQt5.QtWidgets import QApplication, QFileIconProvider
-    from PyQt5.QtCore import QFileInfo
+    from PyQt5.QtWidgets import QApplication
     from PyQt5.QtGui import QFont, QIcon
     from .ui.main_window import MainWindow
+    from .utils.app_info import get_app_icon_path
 
     # 中文路径下 Qt 可能找不到平台插件，手动指定插件目录
     import PyQt5
@@ -155,11 +155,8 @@ def main():
     app.setApplicationName(APP_DISPLAY_NAME)
     app.setApplicationVersion(APP_VERSION)
     app.setFont(QFont("Microsoft YaHei UI", 10))
-    if is_frozen():
-        icon = QFileIconProvider().icon(QFileInfo(sys.executable))
-    else:
-        icon_path = os.path.join(get_bundled_root(), "roco_navigator_icon.svg")
-        icon = QIcon(icon_path) if os.path.exists(icon_path) else QIcon()
+    icon_path = get_app_icon_path()
+    icon = QIcon(icon_path) if os.path.exists(icon_path) else QIcon()
     if not icon.isNull():
         app.setWindowIcon(icon)
 
