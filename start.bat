@@ -8,7 +8,7 @@ exit /b
 
 :main
 echo ================================================
-echo             Roco Navigator v1.0.0
+echo             Roco Navigator v3.0.0
 echo ================================================
 echo.
 

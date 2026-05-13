@@ -17,12 +17,30 @@
 
 ## 快速开始
 
-### 环境要求
+当前版本：`3.0.0`
+
+### 安装版运行
+
+普通用户推荐下载 `RocoNavigator-3.0.0-Setup.exe` 安装包。安装后可通过开始菜单、桌面快捷方式或安装目录中的 `RocoNavigator.exe` 启动，不需要提前安装 Python。
+
+安装版会把用户数据写入：
+
+```text
+%LOCALAPPDATA%\RocoNavigator\
+```
+
+其中包括配置、路线、日志、WIKI 下载地图、点位缓存和可选扩展依赖。卸载程序默认只删除安装目录，不删除这些用户数据。
+
+基础安装包不内置 `torch`、`kornia`、`torch-directml` 或 `ortools`。如需 AI 智能定位、AMD/Intel 显卡加速或高级路线规划，可在软件内“功能管理”中手动安装。
+
+### 源码运行
+
+#### 环境要求
 
 - Windows 10/11
 - [Python 3.10+](https://www.python.org/downloads/)（安装时勾选 Add to PATH）
 
-### 启动
+#### 启动
 
 推荐双击 `start.bat`。首次运行会自动创建虚拟环境并安装基础依赖。
 
@@ -41,6 +59,26 @@ python main.py
 python -m roco_navigator.main
 ```
 
+### 从源码构建安装包
+
+构建安装包需要额外安装 [Inno Setup 6](https://jrsoftware.org/isinfo.php)。执行：
+
+```powershell
+.\scripts\build_release.ps1
+```
+
+脚本会依次运行语法检查、单元测试、安装 `pyinstaller`、生成 `dist\RocoNavigator\`，并在检测到 Inno Setup 后生成安装包：
+
+```text
+installer\output\RocoNavigator-3.0.0-Setup.exe
+```
+
+如只想快速构建，可跳过测试：
+
+```powershell
+.\scripts\build_release.ps1 -SkipTests
+```
+
 ### 使用流程
 
 1. 点击“更新地图”，下载并拼接世界地图瓦片。
@@ -51,7 +89,7 @@ python -m roco_navigator.main
 
 ## 本地数据
 
-仓库只追踪代码和文档。以下文件由本机运行、WIKI 更新或用户操作生成，默认不纳入 Git：
+源码运行时，以下文件由本机运行、WIKI 更新或用户操作生成，默认不纳入 Git：
 
 - `data_files/config.json`
 - `data_files/resources.json`
@@ -64,6 +102,8 @@ python -m roco_navigator.main
 - `logs/`
 
 如果这些文件不存在，可通过程序内“更新地图”“更新点位”和正常使用流程重新生成。
+
+安装版对应数据目录位于 `%LOCALAPPDATA%\RocoNavigator\`。
 
 ## 可选依赖
 

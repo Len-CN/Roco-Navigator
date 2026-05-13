@@ -28,10 +28,26 @@ logs/
 *.log
 
 # Build
-build/
+build/*
+!build/
+!build/roco_navigator.spec
+!build/pyinstaller_entry.py
 dist/
 *.egg-info/
 *.egg
+
+# Release packaging
+*.spec
+!build/roco_navigator.spec
+installer/output/
+release/
+*.msi
+*-Setup.exe
+RocoNavigator-*.exe
+*.sig
+*.pfx
+*.p12
+downloads/
 
 # Cache
 .cache/

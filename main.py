@@ -20,6 +20,15 @@ if _pkg_name not in sys.modules:
     importlib.import_module(_pkg_name)
 __package__ = _pkg_name
 
+from .utils.file_utils import add_user_packages_to_path
+from .utils.runtime import run_embedded_pip
+
+add_user_packages_to_path()
+
+if "--run-pip" in sys.argv:
+    pip_index = sys.argv.index("--run-pip")
+    sys.exit(run_embedded_pip(sys.argv[pip_index + 1:]))
+
 # IMPORTANT: Import torch before PyQt5 to avoid DLL conflicts
 # PyQt5 and PyTorch both use different versions of some DLLs (like c10.dll)
 # Importing torch first ensures its DLLs are loaded correctly
@@ -31,6 +40,7 @@ except (ImportError, OSError):
 
 from .utils.logger import setup_logger
 from .utils.gpu_utils import GPUManager
+from .utils.app_info import APP_DISPLAY_NAME, APP_VERSION
 from .config.settings import Settings
 
 
@@ -63,16 +73,12 @@ def check_environment():
             # 自动安装 CPU 版本
             import subprocess
             try:
-                result = subprocess.run(
-                    [sys.executable, "-m", "pip", "uninstall", "opencv-contrib-python", "-y"],
-                    capture_output=True,
-                    timeout=30
-                )
-                result = subprocess.run(
-                    [sys.executable, "-m", "pip", "install", "opencv-python"],
-                    capture_output=True,
-                    timeout=120
-                )
+                from .utils.runtime import build_pip_command
+
+                exe, args = build_pip_command(["uninstall", "opencv-contrib-python", "-y"])
+                result = subprocess.run([exe] + args, capture_output=True, timeout=30)
+                exe, args = build_pip_command(["install", "opencv-python"])
+                result = subprocess.run([exe] + args, capture_output=True, timeout=120)
                 if result.returncode == 0:
                     logger.info("已自动安装 CPU 版本，请重新启动程序")
                     logger.info("如需使用 CUDA 版本，请先安装 CUDA Toolkit 12.x/13.x")
@@ -150,8 +156,8 @@ def main():
         os.environ["QT_PLUGIN_PATH"] = qt_plugin_path
 
     app = QApplication(sys.argv)
-    app.setApplicationName("洛克导航")
-    app.setApplicationVersion("0.1.0")
+    app.setApplicationName(APP_DISPLAY_NAME)
+    app.setApplicationVersion(APP_VERSION)
     app.setFont(QFont("Microsoft YaHei UI", 10))
 
     # 创建并显示主窗口

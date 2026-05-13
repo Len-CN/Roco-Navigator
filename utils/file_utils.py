@@ -7,8 +7,11 @@
 import json
 import os
 import shutil
+import sys
 import logging
 from typing import Any, Optional
+
+from .app_info import APP_DATA_DIR_NAME
 
 logger = logging.getLogger(__name__)
 
@@ -20,22 +23,73 @@ def get_project_root() -> str:
     Returns:
         str: 项目根目录的绝对路径
     """
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(sys.executable)
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def is_frozen() -> bool:
+    """判断当前是否为 PyInstaller 打包后的运行环境。"""
+    return bool(getattr(sys, "frozen", False))
+
+
+def get_bundled_root() -> str:
+    """获取程序内置资源根目录。"""
+    if is_frozen() and hasattr(sys, "_MEIPASS"):
+        return sys._MEIPASS
+    return get_project_root()
+
+
+def get_user_data_root() -> str:
+    """获取用户可写数据根目录。"""
+    if is_frozen():
+        local_app_data = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+        return os.path.join(local_app_data, APP_DATA_DIR_NAME)
+    return get_project_root()
 
 
 def get_data_dir() -> str:
     """获取数据文件目录"""
-    return os.path.join(get_project_root(), "data_files")
+    return os.path.join(get_user_data_root(), "data_files")
 
 
 def get_assets_dir() -> str:
-    """获取资源文件目录"""
-    return os.path.join(get_project_root(), "assets")
+    """获取可写资源文件目录"""
+    return os.path.join(get_user_data_root(), "assets")
+
+
+def get_bundled_assets_dir() -> str:
+    """获取随程序发布的只读资源目录。"""
+    return os.path.join(get_bundled_root(), "assets")
 
 
 def get_logs_dir() -> str:
     """获取日志目录"""
-    return os.path.join(get_project_root(), "logs")
+    return os.path.join(get_user_data_root(), "logs")
+
+
+def get_packages_dir() -> str:
+    """获取可选依赖安装目录。"""
+    return os.path.join(get_user_data_root(), "packages")
+
+
+def add_user_packages_to_path() -> str:
+    """让打包版能加载用户后续安装的可选依赖。"""
+    packages_dir = get_packages_dir()
+    if packages_dir not in sys.path:
+        sys.path.insert(0, packages_dir)
+
+    if os.path.isdir(packages_dir):
+        os.environ["PYTHONPATH"] = (
+            packages_dir + os.pathsep + os.environ.get("PYTHONPATH", "")
+        ).rstrip(os.pathsep)
+        if hasattr(os, "add_dll_directory"):
+            try:
+                os.add_dll_directory(packages_dir)
+            except OSError:
+                logger.debug("无法添加依赖 DLL 搜索目录: %s", packages_dir)
+
+    return packages_dir
 
 
 def ensure_dir(path: str) -> str:

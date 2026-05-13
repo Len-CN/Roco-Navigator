@@ -10,6 +10,8 @@ import os
 import logging
 from typing import Any, Optional
 
+from ..utils.file_utils import get_data_dir
+
 logger = logging.getLogger(__name__)
 
 
@@ -90,8 +92,7 @@ class Settings:
             config_path: 配置文件路径，默认为 data_files/config.json
         """
         if config_path is None:
-            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            config_path = os.path.join(base_dir, "data_files", "config.json")
+            config_path = os.path.join(get_data_dir(), "config.json")
         
         self._config_path = config_path
         self._config = {}

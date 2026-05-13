@@ -510,9 +510,11 @@ class SettingsDialog(FramelessRoundedDialog):
             def run(self):
                 import subprocess
                 try:
+                    from ...utils.runtime import build_pip_command
+
+                    exe, args = build_pip_command(["install", "-r", self._req_path])
                     result = subprocess.run(
-                        [sys.executable, "-m", "pip", "install",
-                         "-r", self._req_path],
+                        [exe] + args,
                         capture_output=True, text=True, timeout=300
                     )
                     if result.returncode == 0:

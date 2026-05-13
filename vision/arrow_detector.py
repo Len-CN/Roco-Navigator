@@ -20,6 +20,8 @@ from collections import deque
 import cv2
 import numpy as np
 
+from ..utils.file_utils import get_data_dir, get_bundled_root
+
 logger = logging.getLogger(__name__)
 
 _REF_TEMPLATE_FILE = "arrow_template.npz"
@@ -65,11 +67,8 @@ class ArrowDetector:
     def _load_reference(self):
         """从 npz 文件加载参考模板原始数据。"""
         search_paths = [
-            os.path.join(os.path.dirname(__file__), '..', 'data_files',
-                         _REF_TEMPLATE_FILE),
-            os.path.join(os.path.dirname(__file__), '..', '..', 'data_files',
-                         _REF_TEMPLATE_FILE),
-            os.path.join('data_files', _REF_TEMPLATE_FILE),
+            os.path.join(get_data_dir(), _REF_TEMPLATE_FILE),
+            os.path.join(get_bundled_root(), "data_files", _REF_TEMPLATE_FILE),
         ]
         for path in search_paths:
             path = os.path.normpath(path)

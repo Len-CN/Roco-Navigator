@@ -39,6 +39,9 @@ from ..data.map_manager import MapManager
 from ..data.resource_manager import ResourceManager
 from ..data.route_manager import RouteManager, Route
 from ..data.wiki_updater import WikiUpdater
+from ..utils.file_utils import get_packages_dir, is_frozen
+from ..utils.app_info import APP_DISPLAY_NAME
+from ..utils.runtime import build_pip_command
 
 logger = logging.getLogger(__name__)
 
@@ -207,7 +210,7 @@ class MainWindow(QMainWindow):
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setMinimumSize(self.MIN_WIDTH, self.MIN_HEIGHT)
         self.resize(1200, 800)
-        self.setWindowTitle("洛克导航")
+        self.setWindowTitle(APP_DISPLAY_NAME)
         self.setStyleSheet("QMainWindow { background: transparent; }")
 
         # ---- 初始化核心模块 ----
@@ -316,7 +319,7 @@ class MainWindow(QMainWindow):
         main_layout.setSpacing(0)
 
         # 标题栏
-        self._title_bar = TitleBar(self, title="洛克导航")
+        self._title_bar = TitleBar(self, title=APP_DISPLAY_NAME)
         main_layout.addWidget(self._title_bar)
 
         # 内容区域
@@ -1213,6 +1216,8 @@ class MainWindow(QMainWindow):
         # Try zoom levels from high to low (优先 zoom 7 以获得更好的定位精度)
         for z in [7, 6, 8, 5, 4]:
             map_path = self._wiki_updater.get_map_path(z)
+            if not map_path:
+                map_path = self._map_manager.find_map_path(f"world_map_z{z}.png")
             if map_path:
                 if self._map_manager.load_map(map_path, f"world_z{z}"):
                     self._map_canvas.load_map_image(map_path)
@@ -1447,7 +1452,13 @@ class MainWindow(QMainWindow):
         self._dep_needs_restart = needs_restart
         self._dep_install_log = ""
 
-        python_exe = sys.executable
+        pip_args = ["install"] + packages
+        if is_frozen():
+            pip_args.extend(["--target", get_packages_dir(), "--upgrade"])
+        if extra_args:
+            pip_args.extend(extra_args)
+        python_exe, args = build_pip_command(pip_args)
+
         self._dep_install_process = QProcess(self)
         self._dep_install_process.setProcessChannelMode(QProcess.MergedChannels)
         self._dep_install_process.readyReadStandardOutput.connect(
@@ -1455,11 +1466,7 @@ class MainWindow(QMainWindow):
         )
         self._dep_install_process.finished.connect(self._on_dep_install_finished)
 
-        args = ["-m", "pip", "install"] + packages
-        if extra_args:
-            args.extend(extra_args)
-
-        cmd_text = f"$ {python_exe} -m pip install {' '.join(packages)}\n"
+        cmd_text = f"$ {python_exe} {' '.join(args)}\n"
         self._dep_install_log += cmd_text
         self._dep_install_process.start(python_exe, args)
         logger.info("Dep install started: %s", packages)
@@ -1482,7 +1489,7 @@ class MainWindow(QMainWindow):
         elif "opencv-python" in install_pkgs:
             self._dep_opencv_switched = "cpu"
 
-        python_exe = sys.executable
+        python_exe, args = build_pip_command(["uninstall"] + uninstall_pkgs + ["-y"])
         self._dep_install_process = QProcess(self)
         self._dep_install_process.setProcessChannelMode(QProcess.MergedChannels)
         self._dep_install_process.readyReadStandardOutput.connect(
@@ -1492,8 +1499,7 @@ class MainWindow(QMainWindow):
             self._on_dep_uninstall_finished
         )
 
-        args = ["-m", "pip", "uninstall"] + uninstall_pkgs + ["-y"]
-        cmd_text = f"$ pip uninstall {' '.join(uninstall_pkgs)} -y\n"
+        cmd_text = f"$ {python_exe} {' '.join(args)}\n"
         self._dep_install_log += cmd_text
         self._dep_install_process.start(python_exe, args)
 
@@ -1519,7 +1525,12 @@ class MainWindow(QMainWindow):
         pkgs = getattr(self, '_pending_install_pkgs', [])
         extra = getattr(self, '_pending_install_args', [])
         if pkgs:
-            python_exe = sys.executable
+            pip_args = ["install"] + pkgs
+            if is_frozen():
+                pip_args.extend(["--target", get_packages_dir(), "--upgrade"])
+            if extra:
+                pip_args.extend(extra)
+            python_exe, args = build_pip_command(pip_args)
             self._dep_install_process = QProcess(self)
             self._dep_install_process.setProcessChannelMode(QProcess.MergedChannels)
             self._dep_install_process.readyReadStandardOutput.connect(
@@ -1528,10 +1539,7 @@ class MainWindow(QMainWindow):
             self._dep_install_process.finished.connect(
                 self._on_dep_install_finished
             )
-            args = ["-m", "pip", "install"] + pkgs
-            if extra:
-                args.extend(extra)
-            cmd_text = f"$ pip install {' '.join(pkgs)}\n"
+            cmd_text = f"$ {python_exe} {' '.join(args)}\n"
             self._dep_install_log += cmd_text
             self._dep_install_process.start(python_exe, args)
         else:

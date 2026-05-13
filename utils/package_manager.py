@@ -9,12 +9,16 @@ import os
 import subprocess
 import urllib.request
 import urllib.error
+import importlib.util
 from pathlib import Path
 from typing import List, Tuple, Optional, Callable
 import json
 import hashlib
 import time
 import logging
+
+from .file_utils import get_packages_dir, get_user_data_root, is_frozen
+from .runtime import build_pip_command
 
 logger = logging.getLogger(__name__)
 
@@ -94,10 +98,10 @@ class PackageManager:
             cache_dir: 缓存目录，默认为 downloads
         """
         self.python_exe = sys.executable
+        self.packages_dir = Path(get_packages_dir())
         
         if cache_dir is None:
-            project_root = Path(__file__).parent
-            cache_dir = project_root / "downloads"
+            cache_dir = Path(get_user_data_root()) / "downloads"
         
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(exist_ok=True)
@@ -131,17 +135,11 @@ class PackageManager:
             return False
         
         package_name = config["name"]
-        
-        try:
-            result = subprocess.run(
-                [self.python_exe, "-m", "pip", "show", package_name],
-                capture_output=True,
-                text=True,
-                timeout=10
-            )
-            return result.returncode == 0
-        except Exception:
-            return False
+        import_name = package_name.replace("-", "_")
+        if package_name == "ortools":
+            import_name = "ortools"
+
+        return importlib.util.find_spec(import_name) is not None
     
     def get_installed_packages(self) -> List[str]:
         """获取已安装的包列表"""
@@ -164,8 +162,9 @@ class PackageManager:
     def uninstall_package(self, package_name: str) -> Tuple[bool, str]:
         """卸载包"""
         try:
+            exe, args = build_pip_command(["uninstall", package_name, "-y"])
             result = subprocess.run(
-                [self.python_exe, "-m", "pip", "uninstall", package_name, "-y"],
+                [exe] + args,
                 capture_output=True,
                 text=True,
                 timeout=60
@@ -215,15 +214,19 @@ class PackageManager:
         if progress_callback:
             progress_callback(f"正在安装 {package_name}...")
         
-        cmd = [self.python_exe, "-m", "pip", "install", package_name, "--no-cache-dir"]
+        pip_args = ["install", package_name, "--no-cache-dir"]
+        if is_frozen():
+            pip_args.extend(["--target", str(self.packages_dir), "--upgrade"])
         
         # 添加额外索引源（保留默认 PyPI 以解析子依赖）
         if "index_url" in config:
-            cmd.extend(["--extra-index-url", config["index_url"]])
+            pip_args.extend(["--extra-index-url", config["index_url"]])
+
+        exe, args = build_pip_command(pip_args)
         
         try:
             process = subprocess.Popen(
-                cmd,
+                [exe] + args,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
@@ -273,8 +276,9 @@ class PackageManager:
             progress_callback(f"正在安装 {filename}...")
         
         try:
+            exe, args = build_pip_command(["install", str(cache_file), "--no-deps"])
             result = subprocess.run(
-                [self.python_exe, "-m", "pip", "install", str(cache_file), "--no-deps"],
+                [exe] + args,
                 capture_output=True,
                 text=True,
                 timeout=300
@@ -287,8 +291,9 @@ class PackageManager:
                 
                 deps = self._get_package_dependencies(config["name"])
                 for dep in deps:
+                    exe, args = build_pip_command(["install", dep])
                     subprocess.run(
-                        [self.python_exe, "-m", "pip", "install", dep],
+                        [exe] + args,
                         capture_output=True,
                         timeout=120
                     )

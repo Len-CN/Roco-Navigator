@@ -11,7 +11,7 @@ import numpy as np
 from typing import Optional, Tuple, List
 from dataclasses import dataclass
 
-from ..utils.file_utils import get_assets_dir
+from ..utils.file_utils import get_assets_dir, get_bundled_assets_dir
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +42,7 @@ class MapManager:
 
     def __init__(self):
         self._maps_dir = os.path.join(get_assets_dir(), "maps")
+        self._bundled_maps_dir = os.path.join(get_bundled_assets_dir(), "maps")
 
         # 当前地图
         self._current_map_id: Optional[str] = None
@@ -57,6 +58,18 @@ class MapManager:
         self._minimap_scale: float = 1.0  # 小地图像素到世界像素的比例
 
         logger.info("MapManager initialized")
+
+    def find_map_path(self, filename: str) -> str:
+        """按用户更新资源优先、内置资源兜底的顺序查找地图。"""
+        user_path = os.path.join(self._maps_dir, filename)
+        if os.path.exists(user_path):
+            return user_path
+
+        bundled_path = os.path.join(self._bundled_maps_dir, filename)
+        if os.path.exists(bundled_path):
+            return bundled_path
+
+        return user_path
 
     # ==================== 地图加载 ====================
 

@@ -13,6 +13,8 @@ import sys
 from datetime import datetime, timedelta
 from typing import Optional
 
+from .file_utils import get_logs_dir
+
 
 # 全局日志格式
 LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
@@ -69,8 +71,7 @@ def setup_logger(
     # 文件 handler
     if log_to_file:
         if log_dir is None:
-            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            log_dir = os.path.join(base_dir, "logs")
+            log_dir = get_logs_dir()
         
         os.makedirs(log_dir, exist_ok=True)
         
