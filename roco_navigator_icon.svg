@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">洛克导航图标</title>
+  <desc id="desc">浅色圆角地图底座，上方带路线、定位环和绿色导航箭头。</desc>
+  <defs>
+    <linearGradient id="base" x1="148" y1="128" x2="876" y2="920" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#f8fafc"/>
+      <stop offset="0.52" stop-color="#e0e5ec"/>
+      <stop offset="1" stop-color="#c8d1df"/>
+    </linearGradient>
+    <linearGradient id="panel" x1="224" y1="222" x2="814" y2="800" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#edf2f7"/>
+    </linearGradient>
+    <linearGradient id="arrow" x1="512" y1="314" x2="512" y2="654" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#7ee2a7"/>
+      <stop offset="1" stop-color="#2f9e62"/>
+    </linearGradient>
+    <linearGradient id="route" x1="300" y1="654" x2="724" y2="358" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#667eea"/>
+      <stop offset="1" stop-color="#5a67d8"/>
+    </linearGradient>
+    <filter id="softShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="26" stdDeviation="28" flood-color="#344563" flood-opacity="0.28"/>
+    </filter>
+    <filter id="smallShadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="10" dy="16" stdDeviation="10" flood-color="#263450" flood-opacity="0.26"/>
+    </filter>
+    <clipPath id="mapClip">
+      <rect x="194" y="210" width="636" height="594" rx="92"/>
+    </clipPath>
+  </defs>
+
+  <rect x="94" y="92" width="836" height="836" rx="205" fill="url(#base)" filter="url(#softShadow)"/>
+  <rect x="132" y="130" width="760" height="760" rx="168" fill="#eef2f7" stroke="#ffffff" stroke-width="8" opacity="0.95"/>
+
+  <rect x="194" y="210" width="636" height="594" rx="92" fill="url(#panel)" stroke="#b7c2d4" stroke-width="5"/>
+  <g clip-path="url(#mapClip)">
+    <path d="M210 228L417 214L486 380L383 502L218 460Z" fill="#81d6b8"/>
+    <path d="M488 220L812 232L780 430L596 406L516 332Z" fill="#77b2e8"/>
+    <path d="M220 488L390 526L455 780L248 790Z" fill="#ffcd77"/>
+    <path d="M468 422L784 456L804 774L510 794L420 552Z" fill="#a792e8"/>
+
+    <g fill="none" stroke="#ffffff" stroke-width="3.5" stroke-linecap="round" opacity="0.46">
+      <path d="M286 230L258 794"/>
+      <path d="M378 230L350 794"/>
+      <path d="M508 230L480 794"/>
+      <path d="M636 230L608 794"/>
+      <path d="M742 230L714 794"/>
+      <path d="M214 306L810 320"/>
+      <path d="M214 420L810 434"/>
+      <path d="M214 548L810 562"/>
+      <path d="M214 666L810 680"/>
+      <path d="M214 746L810 760"/>
+    </g>
+
+    <path d="M306 650C336 615 356 590 386 570C421 547 447 602 476 602C516 602 526 518 558 480C581 452 604 447 634 426C670 401 693 379 720 360"
+          fill="none" stroke="#ffffff" stroke-width="46" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M306 650C336 615 356 590 386 570C421 547 447 602 476 602C516 602 526 518 558 480C581 452 604 447 634 426C670 401 693 379 720 360"
+          fill="none" stroke="url(#route)" stroke-width="24" stroke-linecap="round" stroke-linejoin="round"/>
+
+    <g>
+      <circle cx="306" cy="650" r="24" fill="#ffffff"/>
+      <circle cx="386" cy="570" r="24" fill="#ffffff"/>
+      <circle cx="476" cy="602" r="24" fill="#ffffff"/>
+      <circle cx="558" cy="480" r="24" fill="#ffffff"/>
+      <circle cx="634" cy="426" r="24" fill="#ffffff"/>
+      <circle cx="720" cy="360" r="24" fill="#ffffff"/>
+      <circle cx="306" cy="650" r="13" fill="#667eea"/>
+      <circle cx="386" cy="570" r="13" fill="#667eea"/>
+      <circle cx="476" cy="602" r="13" fill="#667eea"/>
+      <circle cx="558" cy="480" r="13" fill="#667eea"/>
+      <circle cx="634" cy="426" r="13" fill="#667eea"/>
+      <circle cx="720" cy="360" r="13" fill="#667eea"/>
+    </g>
+  </g>
+
+  <rect x="194" y="210" width="636" height="594" rx="92" fill="none" stroke="#ffffff" stroke-width="8" opacity="0.75"/>
+  <rect x="207" y="223" width="610" height="568" rx="78" fill="none" stroke="#6a7894" stroke-width="3" opacity="0.22"/>
+
+  <circle cx="512" cy="512" r="138" fill="#ffffff" opacity="0.74"/>
+  <circle cx="512" cy="512" r="112" fill="#647eea"/>
+  <circle cx="512" cy="512" r="84" fill="#eef2f7"/>
+  <path d="M512 315L604 654L512 600L420 654Z" fill="url(#arrow)" stroke="#ffffff" stroke-width="8" stroke-linejoin="round" filter="url(#smallShadow)"/>
+
+  <path d="M134 132H704C807 132 890 215 890 318V360H134Z" fill="#ffffff" opacity="0.18"/>
+</svg>

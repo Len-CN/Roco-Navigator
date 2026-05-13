@@ -18,7 +18,7 @@ import time
 import logging
 
 from .file_utils import get_packages_dir, get_user_data_root, is_frozen
-from .runtime import build_pip_command
+from .runtime import build_pip_command, hidden_subprocess_kwargs
 
 logger = logging.getLogger(__name__)
 
@@ -167,7 +167,8 @@ class PackageManager:
                 [exe] + args,
                 capture_output=True,
                 text=True,
-                timeout=60
+                timeout=60,
+                **hidden_subprocess_kwargs(),
             )
             return result.returncode == 0, result.stdout + result.stderr
         except Exception as e:
@@ -232,7 +233,8 @@ class PackageManager:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
-                bufsize=1
+                bufsize=1,
+                **hidden_subprocess_kwargs(),
             )
             
             output_lines = []
@@ -283,7 +285,8 @@ class PackageManager:
                 [exe] + args,
                 capture_output=True,
                 text=True,
-                timeout=300
+                timeout=300,
+                **hidden_subprocess_kwargs(),
             )
             
             if result.returncode == 0:
@@ -297,7 +300,8 @@ class PackageManager:
                     subprocess.run(
                         [exe] + args,
                         capture_output=True,
-                        timeout=120
+                        timeout=120,
+                        **hidden_subprocess_kwargs(),
                     )
             
             return result.returncode == 0, result.stdout + result.stderr

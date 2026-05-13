@@ -13,10 +13,10 @@ from typing import Optional
 from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QMessageBox, QFileDialog, QInputDialog,
-    QApplication, QSizePolicy, QFrame, QStackedWidget
+    QApplication, QFileIconProvider, QSizePolicy, QFrame, QStackedWidget
 )
-from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal, QRectF, QProcess
-from PyQt5.QtGui import QColor, QResizeEvent, QPainter, QPainterPath
+from PyQt5.QtCore import QFileInfo, Qt, QTimer, QThread, pyqtSignal, QRectF, QProcess
+from PyQt5.QtGui import QColor, QResizeEvent, QPainter, QPainterPath, QIcon
 
 from ..config.settings import Settings
 from .widgets.title_bar import TitleBar
@@ -39,7 +39,7 @@ from ..data.map_manager import MapManager
 from ..data.resource_manager import ResourceManager
 from ..data.route_manager import RouteManager, Route
 from ..data.wiki_updater import WikiUpdater
-from ..utils.file_utils import get_packages_dir, is_frozen
+from ..utils.file_utils import get_bundled_root, get_packages_dir, is_frozen
 from ..utils.app_info import APP_DISPLAY_NAME
 from ..utils.runtime import build_pip_command
 
@@ -211,6 +211,13 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(self.MIN_WIDTH, self.MIN_HEIGHT)
         self.resize(1200, 800)
         self.setWindowTitle(APP_DISPLAY_NAME)
+        if is_frozen():
+            icon = QFileIconProvider().icon(QFileInfo(sys.executable))
+        else:
+            icon_path = os.path.join(get_bundled_root(), "roco_navigator_icon.svg")
+            icon = QIcon(icon_path) if os.path.exists(icon_path) else QIcon()
+        if not icon.isNull():
+            self.setWindowIcon(icon)
         self.setStyleSheet("QMainWindow { background: transparent; }")
 
         # ---- 初始化核心模块 ----
@@ -1459,7 +1466,7 @@ class MainWindow(QMainWindow):
             pip_args.extend(extra_args)
         python_exe, args = build_pip_command(pip_args)
 
-        self._dep_install_process = QProcess(self)
+        self._dep_install_process = self._create_hidden_process()
         self._dep_install_process.setProcessChannelMode(QProcess.MergedChannels)
         self._dep_install_process.readyReadStandardOutput.connect(
             self._on_dep_install_output
@@ -1490,7 +1497,7 @@ class MainWindow(QMainWindow):
             self._dep_opencv_switched = "cpu"
 
         python_exe, args = build_pip_command(["uninstall"] + uninstall_pkgs + ["-y"])
-        self._dep_install_process = QProcess(self)
+        self._dep_install_process = self._create_hidden_process()
         self._dep_install_process.setProcessChannelMode(QProcess.MergedChannels)
         self._dep_install_process.readyReadStandardOutput.connect(
             self._on_dep_install_output
@@ -1531,7 +1538,7 @@ class MainWindow(QMainWindow):
             if extra:
                 pip_args.extend(extra)
             python_exe, args = build_pip_command(pip_args)
-            self._dep_install_process = QProcess(self)
+            self._dep_install_process = self._create_hidden_process()
             self._dep_install_process.setProcessChannelMode(QProcess.MergedChannels)
             self._dep_install_process.readyReadStandardOutput.connect(
                 self._on_dep_install_output
@@ -1544,6 +1551,16 @@ class MainWindow(QMainWindow):
             self._dep_install_process.start(python_exe, args)
         else:
             self._dep_install_running = False
+
+    def _create_hidden_process(self) -> QProcess:
+        process = QProcess(self)
+        if sys.platform == "win32":
+            process.setCreateProcessArgumentsModifier(self._hide_process_window)
+        return process
+
+    @staticmethod
+    def _hide_process_window(args):
+        args.flags |= 0x08000000  # CREATE_NO_WINDOW
 
     def _apply_settings(self):
         """应用设置变更到运行中的模块"""
